@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NPC-Sim — Agent-Based Simulation Dashboard</title>
+    <meta name="description" content="A deterministic, psychology-driven agent-based simulation framework for emergent NPC behavior research.">
+    <link rel="stylesheet" href="/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
+</head>
+<body>
+
+<!-- ═══ Header ═══ -->
+<header class="header" id="header">
+    <div class="header-title">
+        <div class="header-logo">N</div>
+        <h1>NPC-Sim</h1>
+    </div>
+
+    <div class="header-stats">
+        <div class="stat-badge">
+            <span class="label">Day</span>
+            <span class="value" id="stat-day">0</span>
+        </div>
+        <div class="stat-badge">
+            <span class="label">Hour</span>
+            <span class="value" id="stat-hour">0:00</span>
+        </div>
+        <div class="stat-badge">
+            <span class="label">Tick</span>
+            <span class="value" id="stat-tick">0</span>
+        </div>
+        <div class="stat-badge">
+            <span class="label">Pop</span>
+            <span class="value" id="stat-pop">0</span>
+        </div>
+    </div>
+
+    <div class="controls">
+        <button class="btn active" id="btn-play" onclick="togglePause()">▶ Play</button>
+        <div class="speed-control">
+            <label>Speed</label>
+            <input type="range" id="speed-slider" min="0.1" max="50" step="0.1" value="1" oninput="changeSpeed(this.value)">
+            <span class="speed-value" id="speed-value">1.0×</span>
+        </div>
+        <input type="number" class="seed-input" id="seed-input" value="42" placeholder="Seed">
+        <button class="btn" onclick="resetSim()">⟲ Reset</button>
+        <button class="btn" id="btn-inject" onclick="toggleInject()">💫 Inject</button>
+    </div>
+</header>
+
+<!-- ═══ Inject Stimulus Panel ═══ -->
+<div class="inject-panel" id="inject-panel">
+    <select id="inject-type">
+        <option value="Threat">⚠ Threat</option>
+        <option value="Food">🍖 Food</option>
+        <option value="Ally">👥 Ally</option>
+    </select>
+    <input type="number" id="inject-x" value="50" placeholder="X" style="width:4em">
+    <input type="number" id="inject-z" value="50" placeholder="Z" style="width:4em">
+    <input type="range" id="inject-intensity" min="0.1" max="1.0" step="0.05" value="0.85">
+    <button class="btn" onclick="injectStimulus()">Send</button>
+</div>
+
+<!-- ═══ Main Grid ═══ -->
+<div class="main">
+
+    <!-- Map -->
+    <div class="card map-container">
+        <div class="card-header">
+            <h2>🗺 World Map</h2>
+            <span class="pop-label" id="map-info" style="font-size:0.75rem;color:var(--text-muted)"></span>
+        </div>
+        <canvas id="map-canvas"></canvas>
+    </div>
+
+    <!-- Sidebar -->
+    <div class="sidebar">
+
+        <!-- Population Stats -->
+        <div class="card">
+            <div class="card-header"><h2>📊 Population</h2></div>
+            <div class="card-body">
+                <div class="pop-stats">
+                    <div class="pop-stat"><span class="pop-value" id="ps-hunger" style="color:var(--accent-5)">0%</span><span class="pop-label">Hunger</span></div>
+                    <div class="pop-stat"><span class="pop-value" id="ps-thirst" style="color:var(--accent-3)">0%</span><span class="pop-label">Thirst</span></div>
+                    <div class="pop-stat"><span class="pop-value" id="ps-happy" style="color:var(--accent-4)">0</span><span class="pop-label">Happy</span></div>
+                    <div class="pop-stat"><span class="pop-value" id="ps-stress" style="color:var(--accent-6)">0%</span><span class="pop-label">Stress</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- NPC List -->
+        <div class="card npc-list">
+            <div class="card-header"><h2>👥 NPCs</h2></div>
+            <div class="card-body" id="npc-list-body"></div>
+        </div>
+
+        <!-- NPC Detail -->
+        <div class="card detail-panel" id="detail-panel" style="display:none">
+            <div class="card-header">
+                <h2 id="detail-name">NPC Detail</h2>
+                <button class="btn" onclick="closeDetail()" style="padding:0.2rem 0.5rem;font-size:0.75rem">✕</button>
+            </div>
+            <div class="card-body" id="detail-body"></div>
+        </div>
+
+        <!-- Event Log -->
+        <div class="card event-log">
+            <div class="card-header"><h2>📜 Events</h2></div>
+            <div class="card-body" id="event-log-body"></div>
+        </div>
+
+    </div>
+</div>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
