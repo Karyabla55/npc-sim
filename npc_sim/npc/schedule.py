@@ -59,6 +59,16 @@ class NPCSchedule:
             return hour >= start or hour < end - 24.0
         return start <= hour < end
 
+    def get_suggested_activity(self, hour: float) -> str:
+        """Return the expected activity label for this hour (soft suggestion for LLM)."""
+        if self._is_in_window(hour, self.sleep_start_hour, self.wake_hour + 24.0):
+            return "sleep"
+        if self._is_in_window(hour, self.work_start_hour, self.work_end_hour):
+            return "work"
+        if abs(hour - self.social_hour) <= 1.5:
+            return "social"
+        return "idle"
+
     def to_dict(self) -> dict:
         return {
             "work_start": self.work_start_hour,

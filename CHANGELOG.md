@@ -5,6 +5,29 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.1] – 2026-03-22
+
+### Added
+
+- **`npc_sim/diagnostics/sim_logger.py`** — `SimLogger`: per-tick CSV logger writing all NPC state to `logs/sim_full.csv` (one row per NPC per tick, 44 columns); enabled/disabled via `SimulationConfig.logger_enabled`; `VitalThresholdTracker` for detecting hunger/thirst/energy crossings at 0.35/0.65/0.85
+- **`npc_sim/diagnostics/__init__.py`** — diagnostics package
+- **`run_diagnostic.py`** — headless 6-hour simulation runner; spawns 5 archetypes with fixed starting inventory, runs 21,600 sim-seconds, then prints pass/fail summary (survivors, deaths, action distribution, Eat/Drink coverage, LLM stats)
+- **`SimulationConfig.logger_enabled`** — boolean field (`default=True`); when `False`, `SimLogger` is a no-op with zero overhead
+- **`NPCGoals.remove_by_type(goal_type)`** — removes all goals of a given type; used by stale-goal pruning
+
+### Fixed
+
+- **`builtin.py` — EatAction** (`npc_sim/decisions/actions/builtin.py`): replaced flat quadratic score (`hunger²`) with urgency-scaled score `min(1.0, hunger² × (1 + (hunger-0.35)×3))` so Eat beats Work (0.6–0.9) at hunger ≥ 0.65
+- **`builtin.py` — DrinkAction**: same urgency-scaled curve as EatAction; Drink now beats Work at thirst ≥ 0.65
+- **`builtin.py` — GatherAction.is_valid()**: added inventory cap (`< 5 items`) preventing infinite accumulation; inventory was growing from 2 → 40,000+ items in 6 h
+- **`builtin.py` — GatherAction.evaluate()**: scores near-zero (`urgency × 0.08`) when both food and water are stocked so Eat/Drink win; scores high (`urgency × 0.85`) when inventory is completely empty so Gather beats WalkTo wandering
+- **`builtin.py` — WalkToAction.evaluate()**: now goal-urgency aware; scores high only when a Food/Water percept exists to move toward, capped at 0.5 for random-wander case so Gather (0.85) wins over purposeless wandering
+- **`builtin.py` — SleepAction.is_valid()**: threshold tightened from `energy_norm < 0.4` to `< 0.35`; returns `False` when `hunger > 0.75` or `thirst > 0.75` (survival beats sleep)
+- **`npc/npc.py` — refresh_need_goals()**: stale goals pruned before new ones added; `FindFood` removed when `hunger < 0.30`, `FindWater` removed when `thirst < 0.30`, `Rest` removed when `energy_norm > 0.50`; eliminates 10+ tick goal lag observed in CSV
+- **Decay rate dt investigation**: confirmed `sim_delta` (= `real_delta × time_scale`) is correctly propagated from `SimulationClock.tick()` through `SimulationManager.tick()` to `NPC.tick()` — no dt bug present
+
+---
+
 ## [1.0.0] – 2026-03-19
 
 **Complete platform migration: Unity/C# → standalone Python + Web + LLM**

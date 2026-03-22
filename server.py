@@ -15,7 +15,7 @@ from npc_sim.npc.npc_factory import NPCFactory
 from npc_sim.npc.inventory import ItemIds
 from npc_sim.events.stimulus import Stimulus, StimulusType
 from npc_sim.decisions.actions.builtin import (
-    EatAction, SleepAction, FleeAction, GatherAction, HealAction,
+    EatAction, DrinkAction, SleepAction, FleeAction, GatherAction, HealAction,
     AttackAction, SocializeAction, TradeAction, WorkAction, PrayAction, WalkToAction,
 )
 
@@ -37,13 +37,13 @@ def create_simulation(seed: int = 42) -> SimulationManager:
         seed=seed,
         tick_rate=10.0,
         day_length_seconds=1440.0,
-        initial_time_scale=60.0,
+        initial_time_scale=1.0,
         max_npc_count=50,
     )
     mgr = SimulationManager(config)
 
     # Register all built-in actions
-    for action_cls in [EatAction, SleepAction, FleeAction, GatherAction, HealAction,
+    for action_cls in [EatAction, DrinkAction, SleepAction, FleeAction, GatherAction, HealAction,
                        AttackAction, SocializeAction, TradeAction, WorkAction, PrayAction, WalkToAction]:
         mgr.action_library.register(action_cls())
 
@@ -70,8 +70,10 @@ def create_simulation(seed: int = 42) -> SimulationManager:
         z = 50.0 + math.sin(angle) * radius
         npc.position = SimVector3(x, 0, z)
         npc.inventory.add(ItemIds.FOOD, rng.next_int(1, 4))
+        npc.inventory.add(ItemIds.WATER, rng.next_int(1, 3))
         npc.inventory.add(ItemIds.GOLD, rng.next_int(0, 3))
         npc.vitals.set_hunger(rng.next_float(0.1, 0.5))
+        npc.vitals.set_thirst(rng.next_float(0.1, 0.4))
         mgr.add_npc(npc)
 
     return mgr

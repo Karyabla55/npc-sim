@@ -45,13 +45,12 @@ class LLMDecisionSystem:
         self._evaluator = evaluator or UtilityEvaluator()
 
         # Config
-        self._llm_tick_every = llm_tick_every
+        self._llm_tick_every = llm_tick_every  # kept for API compat, no longer used
         self._timeout = timeout_seconds
         self._interrupt_threat = interrupt_threat_threshold
         self._interrupt_hp_drop = interrupt_hp_drop
 
         # Per-NPC state (accessed from multiple threads)
-        self._tick_counter: int = 0
         self._last_hp: float = -1.0
         self._pending: bool = False        # LLM call in flight
         self._pending_lock = threading.Lock()
@@ -129,16 +128,11 @@ class LLMDecisionSystem:
         return False
 
     def _should_call_llm(self, interrupt: bool) -> bool:
+        """LLM is only called on explicit triggers (H2 interrupt). Never on a timer."""
         with self._pending_lock:
             if self._pending:
                 return False   # already one in flight
-        if interrupt:
-            return True
-        self._tick_counter += 1
-        if self._tick_counter >= self._llm_tick_every:
-            self._tick_counter = 0
-            return True
-        return False
+        return interrupt
 
     # ── Fire async LLM request (H3) ───────────────────────────────────────────
 

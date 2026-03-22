@@ -83,6 +83,12 @@ class NPCGoals:
         self._goals = [g for g in self._goals if g.goal_id != goal_id]
         return len(self._goals) < before
 
+    def remove_by_type(self, goal_type: str) -> int:
+        """Immediately remove all goals of a given type. Returns count removed."""
+        before = len(self._goals)
+        self._goals = [g for g in self._goals if g.goal_type != goal_type]
+        return before - len(self._goals)
+
     def get_top_goal(self) -> Goal | None:
         for g in self._goals:
             if g.is_active:

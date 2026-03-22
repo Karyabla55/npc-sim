@@ -19,6 +19,8 @@ from npc_sim.simulation.spatial_grid import DictionaryGrid
 from npc_sim.simulation.stimulus_dispatcher import StimulusDispatcher
 from npc_sim.simulation.faction_registry import FactionRegistry
 from npc_sim.simulation.population_stats import PopulationStats
+from npc_sim.diagnostics.sim_logger import SimLogger, VitalThresholdTracker
+
 # LLM — imported lazily so simulation runs fine without LLM installed
 try:
     from npc_sim.llm.llm_backend import OllamaBackend, MockBackend
@@ -70,6 +72,13 @@ class SimulationManager:
         self._llm_serializer = None
         self.world_registry: "WorldRegistry | None" = None
 
+        # Diagnostics
+        self.logger = SimLogger(
+            log_dir="logs",
+            enabled=self.config.logger_enabled,
+        )
+        self._vital_trackers: dict[str, VitalThresholdTracker] = {}
+
         self.tick_count: int = 0
 
     # ── NPC management ──
@@ -85,6 +94,8 @@ class SimulationManager:
 
         self._decision_systems[npc.identity.npc_id] = DecisionSystem(
             self.action_library, self.evaluator)
+
+        self._vital_trackers[npc.identity.npc_id] = VitalThresholdTracker()
 
         self.faction_registry.register_faction(npc.identity.faction)
 
@@ -153,6 +164,7 @@ class SimulationManager:
         self._perception_systems.pop(npc_id, None)
         self._decision_systems.pop(npc_id, None)
         self._last_actions.pop(npc_id, None)
+        self._vital_trackers.pop(npc_id, None)
 
     # ── Tick ──
 
@@ -177,19 +189,21 @@ class SimulationManager:
         new_events: list[dict] = []
 
         for npc in all_npcs:
-            if not npc.is_active or not npc.vitals.is_alive:
-                continue
-
             npc_id = npc.identity.npc_id
+            was_alive = npc.vitals.is_alive
+
+            if not npc.is_active or not was_alive:
+                # Still log dead NPCs once so final state is captured
+                continue
 
             # Perception
             ps = self._perception_systems.get(npc_id)
             stimuli = self.dispatcher.drain_for(npc_id)
-            changed_percepts = []
+            active_percepts = []
             if ps:
-                changed_percepts = ps.tick(
-                    stimuli, npc.position, npc.forward,
-                    npc.vitals, npc.psychology, current_time)
+                ps.tick(stimuli, npc.position, npc.forward,
+                        npc.vitals, npc.psychology, current_time)
+                active_percepts = ps.active_percepts
 
             # NPC internal tick (vitals, emotions, memory decay...)
             npc.tick(sim_delta, current_time)
@@ -197,15 +211,39 @@ class SimulationManager:
             # Need → Goal pipeline
             npc.refresh_need_goals(current_time)
 
-            # Decision — use LLMDecisionSystem if enabled, else UtilityEvaluator
+            # ── Vital threshold crossings for logger ──
+            event_type = ""
+            event_detail = ""
+            tracker = self._vital_trackers.get(npc_id)
+            if tracker and self.logger.enabled:
+                for vital, value in [
+                    ("hunger", npc.vitals.hunger),
+                    ("thirst", npc.vitals.thirst),
+                    ("energy", npc.vitals.energy_norm),
+                ]:
+                    for (v, thr, direction) in tracker.check(vital, value):
+                        event_type = "VitalThreshold"
+                        event_detail = self.logger.note_vital_threshold(
+                            npc_id, v, value, direction, thr)
+
+            # Death detection
+            death_cause = ""
+            if was_alive and not npc.vitals.is_alive:
+                death_cause = "health=0"
+                event_type = "Death"
+                event_detail = f"NPC died at tick {self.tick_count}"
+
+            # Decision
             llm_ds = self._llm_decision_systems.get(npc_id)
             ds = self._decision_systems.get(npc_id)
             active_ds = llm_ds if llm_ds is not None else ds
 
+            chosen_action = None
+            action_name = "Idle"
             if active_ds and ps:
                 ctx = ActionContext(
                     npc=npc,
-                    percepts=ps.active_percepts,
+                    percepts=active_percepts,
                     current_time=current_time,
                     delta_time=sim_delta,
                     world=self.world,
@@ -215,7 +253,8 @@ class SimulationManager:
                 ctx._action_library = self.action_library
                 chosen_action = active_ds.tick(ctx)
                 if chosen_action:
-                    self._last_actions[npc_id] = chosen_action.action_type
+                    action_name = chosen_action.action_type
+                    self._last_actions[npc_id] = action_name
                 else:
                     self._last_actions[npc_id] = "Idle"
 
@@ -224,6 +263,27 @@ class SimulationManager:
                     self._last_reasoning[npc_id] = llm_ds.last_reasoning
                     self._last_dialogue[npc_id] = llm_ds.last_dialogue
                     self._last_emotion[npc_id] = llm_ds.last_emotion
+
+            # ── Zone resolution for logger ──
+            zone_name = ""
+            if self.world_registry:
+                zone_name = self.world_registry.resolve(
+                    npc.position.x, npc.position.z).get("zone", "")
+
+            # ── Log this NPC tick ──
+            self.logger.log_npc_tick(
+                tick=self.tick_count,
+                sim_day=self.clock.current_day,
+                sim_hour=self.clock.current_hour,
+                npc=npc,
+                percepts=active_percepts,
+                action_selected=action_name,
+                action_valid=chosen_action is not None,
+                event_type=event_type,
+                event_detail=event_detail,
+                death_cause=death_cause,
+                zone=zone_name,
+            )
 
         # 4. Update population stats
         self.population_stats.update(self.world.all_npcs, self.world.get_recent_events(50))
@@ -265,6 +325,12 @@ class SimulationManager:
             }
         queue = self._llm_queue.get_stats() if self._llm_queue else {}
         return {"queue": queue, "per_npc": per_npc}
+
+    def close(self) -> None:
+        """Shutdown cleanly — flush logger, stop LLM queue."""
+        self.logger.close()
+        if self._llm_queue:
+            self._llm_queue.shutdown()
 
     def __repr__(self) -> str:
         return (f"[SimulationManager] Tick:{self.tick_count} {self.clock} "

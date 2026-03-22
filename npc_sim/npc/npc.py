@@ -151,6 +151,17 @@ class NPC:
     def refresh_need_goals(self, current_time: float, urgency_window: float = 300.0) -> None:
         expiry = current_time + urgency_window
 
+        # ── Prune stale goals first (vital already satisfied) ──
+        # Threshold deliberately lower than activation threshold so goals clear
+        # promptly after Eat/Drink executes without waiting for full loop.
+        if self.vitals.hunger < 0.30:
+            self.goals.remove_by_type(GoalType.FIND_FOOD)
+        if self.vitals.thirst < 0.30:
+            self.goals.remove_by_type(GoalType.FIND_WATER)
+        if self.vitals.energy_norm > 0.50:
+            self.goals.remove_by_type(GoalType.REST)
+
+        # ── Add new goals when thresholds crossed ──
         if self.vitals.hunger > 0.65 and not self.goals.has_active_goal(GoalType.FIND_FOOD):
             self.goals.add_goal(Goal(GoalType.FIND_FOOD, "I need to eat", self.vitals.hunger, expiry))
 

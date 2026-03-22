@@ -96,4 +96,6 @@ venv.bak/
 *.swo
 
 # Project specific
-Runtime/
+logs/
+Stateful_NPC/data/
+*.ipynb

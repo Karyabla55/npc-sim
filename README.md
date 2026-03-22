@@ -1,6 +1,6 @@
 # NPC-Sim
 
-**`npc_sim` · Version 1.0.0 · Python 3.10+**
+**`npc_sim` · Version 1.0.1 · Python 3.10+**
 
 > A **deterministic, civilization-scale NPC simulation framework** — originally conceived as a Unity package, now a fully standalone Python system with a local web dashboard and LLM-driven autonomous agent support.
 >
@@ -18,6 +18,10 @@
 pip install flask flask-socketio simple-websocket
 python server.py
 # Open http://localhost:5000
+
+# Run headless 6-hour diagnostic (no Flask, no browser required)
+python run_diagnostic.py
+# → logs/sim_full.csv  (per-tick CSV log)
 ```
 
 ---
@@ -74,7 +78,8 @@ npc_sim/
 ├── events/        SimEvent, Stimulus
 ├── npc/           NPC, NPCFactory + 10 subsystems (vitals, psychology, memory, …)
 ├── perception/    PerceptionSystem, SensorRange, PerceptionFilter
-├── decisions/     DecisionSystem, UtilityEvaluator, ActionLibrary + 11 built-in actions
+├── decisions/     DecisionSystem, UtilityEvaluator, ActionLibrary + 12 built-in actions
+├── diagnostics/   SimLogger (per-tick CSV), VitalThresholdTracker
 ├── simulation/    SimulationManager, SimWorldAdapter, StimulusDispatcher, …
 └── llm/           WorldRegistry, NPCSerializer, OllamaBackend, LLMRequestQueue,
                    LLMDecisionSystem
@@ -86,6 +91,8 @@ Stateful_NPC/
                    test_v2.jsonl  (~4 MB, 2k examples)
 
 server.py          Flask + SocketIO backend
+run_diagnostic.py  Headless 6-hour sim runner + CSV log analyser
+logs/              sim_full.csv  (per-tick NPC diagnostic log, one row per NPC per tick)
 static/            index.html, style.css, app.js  (web dashboard)
 ```
 
@@ -95,17 +102,18 @@ static/            index.html, style.css, app.js  (web dashboard)
 
 | `action_id` | Category | Behaviour |
 |-------------|---------|-----------|
-| `eat` | Survival | Eats from inventory; scores quadratically on hunger |
-| `sleep` | Survival | Restores energy in low-threat periods |
+| `eat` | Survival | Eats from inventory; scores quadratically on hunger with urgency multiplier |
+| `drink` | Survival | Drinks water from inventory; scores quadratically on thirst with urgency multiplier |
+| `sleep` | Survival | Restores energy when low; blocked when starving or critically thirsty |
 | `flee` | Safety | Moves NPC away from highest-threat percept |
-| `gather` | Survival | Harvests food/resources based on need urgency |
+| `gather` | Survival | Harvests food/water based on need urgency; capped at 5 items per resource |
 | `heal` | Health | Consumes medicine; reduces fear |
 | `attack` | Combat | Melee damage + belief propagation + reputation penalty |
 | `socialize` | Social | Trust/affinity gain; gossips salient memory to ally |
 | `trade` | Economy | Gold ↔ food exchange; both parties gain trust |
 | `work` | Economy | Occupation-specific resource generation |
 | `pray` | Spiritual | Stress relief; emits Prayer social stimulus |
-| `walk_to` | Navigation | Goal-aware NPC movement |
+| `walk_to` | Navigation | Goal-aware NPC movement; directed toward percepts when lacking resources |
 
 ---
 
@@ -149,14 +157,15 @@ SimulationManager.tick()
 └── [per NPC, deterministic order]
     ├── PerceptionSystem.tick()      → active_percepts
     ├── NPC.tick()                   → vitals/emotions decay
-    ├── NPC.refresh_need_goals()     → need → goal pipeline
-    └── LLMDecisionSystem.tick()     → action selection
-        ├── [H2] interrupt check
-        ├── NPCSerializer.build_payload()
-        ├── LLMRequestQueue.submit()
-        │    └── OllamaBackend.call() → LLMResponse
-        │         └── [H4] guided retry on invalid action_id
-        └── fallback: UtilityEvaluator
+    ├── NPC.refresh_need_goals()     → need → goal pipeline (stale goals pruned)
+    ├── LLMDecisionSystem.tick()     → action selection
+    │   ├── [H2] interrupt check
+    │   ├── NPCSerializer.build_payload()
+    │   ├── LLMRequestQueue.submit()
+    │   │    └── OllamaBackend.call() → LLMResponse
+    │   │         └── [H4] guided retry on invalid action_id
+    │   └── fallback: UtilityEvaluator
+    └── SimLogger.log_npc_tick()     → logs/sim_full.csv (one row per NPC per tick)
 ```
 
 ---

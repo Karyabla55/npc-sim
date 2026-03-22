@@ -27,8 +27,8 @@ class SimulationConfig:
 
     # ── Physiological decay rates (per sim-second) ──
     hunger_decay_rate: float = 0.001
-    thirst_decay_rate: float = 0.002
-    energy_decay_rate: float = 0.5
+    thirst_decay_rate: float = 0.0015
+    energy_decay_rate: float = 0.073
 
     # ── Psychological decay rates (per sim-second) ──
     fear_decay_rate: float = 0.0005
@@ -65,6 +65,9 @@ class SimulationConfig:
     llm_interrupt_threat_threshold: float = 0.8     # H2: immediate call on high threat
     llm_interrupt_hp_drop: float = 15.0             # H2: immediate call on damage
     ollama_base_url: str = "http://localhost:11434"
+
+    # ── Diagnostics ──
+    logger_enabled: bool = True        # False = no-op SimLogger, zero overhead
 
     def __repr__(self) -> str:
         return (f"[SimConfig] Seed:{self.seed} TickRate:{self.tick_rate} "

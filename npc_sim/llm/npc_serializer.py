@@ -87,8 +87,15 @@ class NPCSerializer:
             "memories": self._serialize_memories(npc, ctx.current_time),
             "beliefs": self._serialize_beliefs(npc),
             "factions": self._serialize_factions(npc),
-            "goals_top": npc.goals.get_highest_priority().goal_type
-                         if npc.goals.get_highest_priority() else None,
+            "goals_top": npc.goals.get_top_goal().goal_type
+                         if npc.goals.get_top_goal() else None,
+            "sched": {
+                "act":      npc.schedule.get_suggested_activity(ctx.sim_day_hour),
+                "wk_start": npc.schedule.work_start_hour,
+                "wk_end":   npc.schedule.work_end_hour,
+                "sleep":    npc.schedule.sleep_start_hour,
+                "wake":     npc.schedule.wake_hour,
+            },
             "interrupt": interrupt,
             "valid_actions": self._valid_actions(ctx),
         }

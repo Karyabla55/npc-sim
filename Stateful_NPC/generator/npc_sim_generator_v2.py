@@ -1,19 +1,15 @@
 # Copyright 2025-2026 Sadık Abdusselam Albayrak
 # Licensed under the Apache License, Version 2.0
 """
-Upgraded NPC-Sim dataset generator v1.
+Upgraded NPC-Sim dataset generator v3.
 
-Extends the original Stateful_NPC state machine with the full NPC-Sim state:
-  - Big Five personality (instead of just stress/trust)
-  - All 11 NPC-Sim actions (eat, sleep, flee, gather, heal, attack,
-    socialize, trade, work, pray, walk_to)
-  - Semantic zone labels (H1)
-  - Episodic memories (ring buffer style, 1-3 salient entries)
-  - Vitals: hp, energy, hunger, thirst, stress
-  - Percepts: up to 3 perceived entities with threat level
-  - Beliefs: up to 2 belief nodes
-  - Interrupt flag (H2)
-  - Output: {npc_id, reasoning, selected_action, emotion} JSON
+Changes vs v2:
+  - Added "drink" action (mirrors eat, consumes water)
+  - Added water to NPC inventory generation
+  - ~15% intent deviation examples: biologically optimal action overridden
+    by social context, curiosity, low mood, or active conversation
+  - "sched" field in NPC state payload (P3 Option B: schedule as soft suggestion)
+  - Corrected dataset counts: 20k train / 2k test
 
 Output format: Llama-3 / custom model instruct chat format (JSONL)
 Each line: {"text": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>..."}
@@ -27,7 +23,7 @@ import sys
 import uuid
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Roles and Personalities  (extended from Stateful_NPC v6)
+# Roles and Personalities
 # ─────────────────────────────────────────────────────────────────────────────
 
 ROLES = [
@@ -61,18 +57,57 @@ ARCHETYPES = {
 
 ZONES = [
     {"zone": "MarketSquare", "landmark": "CentralFountain"},
-    {"zone": "Tavern", "landmark": "OldOakSign"},
-    {"zone": "Temple", "landmark": "StoneShrineGate"},
-    {"zone": "Barracks", "landmark": "ArmoryDoor"},
-    {"zone": "WildernessEdge", "landmark": "BrokenMilestone"},
-    {"zone": "FarmLands", "landmark": "MillWheel"},
-    {"zone": "MarketDistrict", "landmark": "CityGates"},
+    {"zone": "Tavern",        "landmark": "OldOakSign"},
+    {"zone": "Temple",        "landmark": "StoneShrineGate"},
+    {"zone": "Barracks",      "landmark": "ArmoryDoor"},
+    {"zone": "WildernessEdge","landmark": "BrokenMilestone"},
+    {"zone": "FarmLands",     "landmark": "MillWheel"},
+    {"zone": "MarketDistrict","landmark": "CityGates"},
 ]
 
 NPC_SIM_ACTIONS = [
-    "eat", "sleep", "flee", "gather", "heal",
+    "eat", "drink", "sleep", "flee", "gather", "heal",
     "attack", "socialize", "trade", "work", "pray", "walk_to",
 ]
+
+# ── Schedule presets per occupation (work_start, work_end, sleep_start, wake, social_hour)
+SCHEDULE_PRESETS = {
+    "Guard":      (6, 14, 21, 5, 16),
+    "Merchant":   (9, 19, 23, 8, 20),
+    "Scholar":    (8, 20, 24, 7, 18),
+    "Farmer":     (5, 17, 20, 4, 18),
+    "Priest":     (7, 13, 21, 5, 14),
+    "Blacksmith": (7, 17, 22, 6, 19),
+    "Knight":     (6, 16, 22, 5, 17),
+    "Innkeeper":  (10, 23, 2, 9, 20),
+    "Bard":       (14, 24, 3, 10, 21),
+    "Thief":      (20, 3,  8, 16, 22),
+}
+_DEFAULT_SCHED = (9, 17, 22, 7, 19)
+
+
+def _get_sched(role: str, hour: float) -> dict:
+    ws, we, ss, wk, sh = SCHEDULE_PRESETS.get(role, _DEFAULT_SCHED)
+    # Determine suggested activity for this hour
+    in_work = (ws <= hour < we) if we <= 24 else (hour >= ws or hour < we - 24)
+    in_sleep = (ss <= hour < 24) or (hour < wk)
+    near_social = abs(hour - sh) <= 1.5
+    if in_sleep:
+        suggested = "sleep"
+    elif in_work:
+        suggested = "work"
+    elif near_social:
+        suggested = "social"
+    else:
+        suggested = "idle"
+    return {
+        "act": suggested,
+        "wk_start": ws,
+        "wk_end": we,
+        "sleep": ss,
+        "wake": wk,
+    }
+
 
 ROLE_MEMORIES = {
     "Guard":      ["Nöbette uyuyakaldım, komutan kızdı.", "Bir hırsızı yakaladım, ödül verdiler.",
@@ -106,25 +141,15 @@ DEFAULT_MEMORIES = [
     "Komşumla kavga ettim, moralim bozuk.",
 ]
 
-THREAT_ENTITIES = ["wolf", "bandit_01", "soldier_enemy", "ghost", "wild_boar"]
+THREAT_ENTITIES  = ["wolf", "bandit_01", "soldier_enemy", "ghost", "wild_boar"]
 NEUTRAL_ENTITIES = ["merchant_npc", "villager_01", "guard_npc", "priest_npc"]
-FOOD_ENTITIES = ["food_stall", "bread_crate", "apple_tree", "herb_patch"]
-
-MOOD_MAP = {
-    (0.6, 1.0): "Happy",
-    (0.0, 0.3): "Fearful",
-    (0.4, 0.7): "Angry",
-    (-1.0, 0.0): "Distressed",
-}
+FOOD_ENTITIES    = ["food_stall", "bread_crate", "apple_tree", "herb_patch"]
 
 
 def _mood(happiness, fear, anger) -> str:
-    if happiness > 0.5:
-        return "Happy"
-    if fear > 0.5:
-        return "Fearful"
-    if anger > 0.5:
-        return "Angry"
+    if happiness > 0.5: return "Happy"
+    if fear      > 0.5: return "Fearful"
+    if anger     > 0.5: return "Angry"
     return "Calm"
 
 
@@ -138,58 +163,60 @@ def _rjitter(base: float, sigma: float = 0.1) -> float:
 
 def generate_npc_state() -> dict:
     arch_name = random.choice(list(ARCHETYPES.keys()))
-    arch = ARCHETYPES[arch_name]
-    role = random.choice(ROLES)
-    npc_id = "npc_" + uuid.uuid4().hex[:8]
+    arch      = ARCHETYPES[arch_name]
+    role      = random.choice(ROLES)
+    npc_id    = "npc_" + uuid.uuid4().hex[:8]
 
-    b5 = {k: round(_rjitter(v, 0.12), 2) for k, v in arch["b5"].items()}
+    b5     = {k: round(_rjitter(v, 0.12), 2) for k, v in arch["b5"].items()}
     traits = list(arch["traits"])
 
     # Vitals
-    hp = round(random.uniform(20, 120), 1)
-    hp_max = 120.0
-    energy = round(random.uniform(0.1, 1.0), 2)
-    hunger = round(random.uniform(0.0, 1.0), 2)
-    thirst = round(random.uniform(0.0, 1.0), 2)
-    stress = round(random.uniform(0.0, 0.9), 2)
+    hp      = round(random.uniform(20, 120), 1)
+    hp_max  = 120.0
+    energy  = round(random.uniform(0.1, 1.0), 2)
+    hunger  = round(random.uniform(0.0, 1.0), 2)
+    thirst  = round(random.uniform(0.0, 1.0), 2)
+    stress  = round(random.uniform(0.0, 0.9), 2)
 
     # Emotions
-    fear = round(random.uniform(0.0, b5["n"]), 2)
+    fear      = round(random.uniform(0.0, b5["n"]), 2)
     happiness = round(max(0.0, 0.7 - stress - fear * 0.5), 2)
-    anger = round(random.uniform(0.0, 0.5 + b5["n"] * 0.5), 2)
-    mood = _mood(happiness, fear, anger)
+    anger     = round(random.uniform(0.0, 0.5 + b5["n"] * 0.5), 2)
+    mood      = _mood(happiness, fear, anger)
 
     # Location
     zone_info = random.choice(ZONES)
     pos_x = round(random.uniform(5, 95), 1)
     pos_z = round(random.uniform(5, 95), 1)
+    hour  = round(random.uniform(0, 24), 1)
 
     # Percepts
-    percepts = []
+    percepts  = []
     interrupt = False
-    if random.random() < 0.35:  # 35% chance of threat
-        threat_id = random.choice(THREAT_ENTITIES)
+    if random.random() < 0.35:   # 35% threat
+        threat_id    = random.choice(THREAT_ENTITIES)
         threat_level = round(random.uniform(0.5, 1.0), 2)
-        sal = round(random.uniform(0.6, 1.0), 2)
+        sal          = round(random.uniform(0.6, 1.0), 2)
         percepts.append({"id": threat_id, "tag": "Threat", "sal": sal, "threat": threat_level})
         if threat_level >= 0.8:
             interrupt = True
-    if random.random() < 0.4:
+    if random.random() < 0.4:   # 40% social NPC nearby
         neu_id = random.choice(NEUTRAL_ENTITIES)
-        percepts.append({"id": neu_id, "tag": "Social", "sal": round(random.uniform(0.2, 0.7), 2)})
-    if random.random() < 0.3:
+        percepts.append({"id": neu_id, "tag": "Social",
+                         "sal": round(random.uniform(0.2, 0.7), 2)})
+    if random.random() < 0.3:   # 30% food visible
         food_id = random.choice(FOOD_ENTITIES)
-        percepts.append({"id": food_id, "tag": "Food", "sal": round(random.uniform(0.3, 0.8), 2)})
+        percepts.append({"id": food_id, "tag": "Food",
+                         "sal": round(random.uniform(0.3, 0.8), 2)})
 
     # Memories (1-3)
-    pool = ROLE_MEMORIES.get(role, DEFAULT_MEMORIES) + DEFAULT_MEMORIES
-    num_mems = random.randint(1, 3)
+    pool         = ROLE_MEMORIES.get(role, DEFAULT_MEMORIES) + DEFAULT_MEMORIES
+    num_mems     = random.randint(1, 3)
     selected_mems = random.sample(pool, min(len(pool), num_mems))
     memories = []
-    for i, mem in enumerate(selected_mems):
-        ew = round(random.uniform(-0.8, 0.8), 2)
-        dt = random.randint(30, 3600)
-        # negative words → negative ew
+    for mem in selected_mems:
+        ew  = round(random.uniform(-0.8, 0.8), 2)
+        dt  = random.randint(30, 3600)
         if any(w in mem.lower() for w in ["çalındı", "saldırdı", "kötü", "kızdı", "yanar"]):
             ew = -abs(ew)
         memories.append({"evt": "Memory", "desc": mem[:80], "ew": ew, "dt": dt})
@@ -199,46 +226,46 @@ def generate_npc_state() -> dict:
     if percepts and random.random() < 0.5:
         subj = percepts[0]["id"]
         conf = round(random.uniform(0.4, 0.9), 2)
-        val = -0.8 if "Threat" in percepts[0]["tag"] else round(random.uniform(-0.4, 0.4), 2)
+        val  = -0.8 if "Threat" in percepts[0]["tag"] else round(random.uniform(-0.4, 0.4), 2)
         beliefs.append({"subj": subj, "conf": conf, "val": val})
 
-    # Inventory
+    # Inventory — food AND water
     inv = []
     if random.random() < 0.6:
-        inv.append({"id": "food", "n": random.randint(1, 5)})
+        inv.append({"id": "food",  "n": random.randint(1, 5)})
+    if random.random() < 0.55:
+        inv.append({"id": "water", "n": random.randint(1, 4)})
     if random.random() < 0.4:
-        inv.append({"id": "gold", "n": random.randint(1, 50)})
+        inv.append({"id": "gold",  "n": random.randint(1, 50)})
     if random.random() < 0.2:
         inv.append({"id": "medicine", "n": random.randint(1, 3)})
 
     # Top goal
     goals = []
-    if hunger > 0.65:
-        goals.append("FindFood")
-    if thirst > 0.70:
-        goals.append("FindWater")
-    if energy < 0.3:
-        goals.append("Rest")
+    if hunger > 0.65:  goals.append("FindFood")
+    if thirst > 0.70:  goals.append("FindWater")
+    if energy < 0.3:   goals.append("Rest")
     goals_top = goals[0] if goals else None
 
     return {
-        "id": npc_id,
-        "arch": arch_name,
-        "occ": role,
+        "id":      npc_id,
+        "arch":    arch_name,
+        "occ":     role,
         "faction": random.choice(["CityWatch", "MerchantGuild", "Bandits", "Church", "Farmers"]),
-        "b5": b5,
-        "traits": traits,
-        "vitals": {"hp": hp, "hp_max": hp_max, "en": energy,
-                   "hun": hunger, "thi": thirst, "str": stress},
-        "emo": {"hap": happiness, "fear": fear, "ang": anger, "mood": mood},
-        "inv": inv,
-        "time": {"day": random.randint(1, 10), "hr": round(random.uniform(0, 24), 1)},
-        "pos": {"x": pos_x, "z": pos_z, **zone_info},
-        "percepts": percepts,
-        "memories": memories,
-        "beliefs": beliefs,
-        "factions": {"CityWatch": round(random.uniform(-0.5, 0.5), 2),
-                     "Bandits": round(random.uniform(-0.8, 0.2), 2)},
+        "b5":      b5,
+        "traits":  traits,
+        "vitals":  {"hp": hp, "hp_max": hp_max, "en": energy,
+                    "hun": hunger, "thi": thirst, "str": stress},
+        "emo":     {"hap": happiness, "fear": fear, "ang": anger, "mood": mood},
+        "inv":     inv,
+        "time":    {"day": random.randint(1, 10), "hr": hour},
+        "pos":     {"x": pos_x, "z": pos_z, **zone_info},
+        "sched":   _get_sched(role, hour),       # P3: soft schedule suggestion
+        "percepts":  percepts,
+        "memories":  memories,
+        "beliefs":   beliefs,
+        "factions":  {"CityWatch":  round(random.uniform(-0.5, 0.5), 2),
+                      "Bandits":    round(random.uniform(-0.8, 0.2), 2)},
         "goals_top": goals_top,
         "interrupt": interrupt,
         "valid_actions": NPC_SIM_ACTIONS,
@@ -246,92 +273,166 @@ def generate_npc_state() -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Deterministic action + reasoning generator
+# Standard (biologically-optimal) action selector
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _select_action(state: dict) -> tuple[str, str, str | None, str]:
-    """Return (action_id, reasoning, dialogue, emotion)."""
-    v = state["vitals"]
-    emo = state["emo"]
+def _select_action_standard(state: dict) -> tuple[str, str, str | None, str]:
+    """Return (action_id, reasoning, dialogue, emotion) — biologically optimal path."""
+    v        = state["vitals"]
+    emo      = state["emo"]
     percepts = state["percepts"]
-    arch = state["arch"]
-    traits = state["traits"]
-    inv_ids = [i["id"] for i in state["inv"]]
+    arch     = state["arch"]
+    traits   = state["traits"]
+    inv_ids  = [i["id"] for i in state["inv"]]
     interrupt = state["interrupt"]
-    role = state["occ"]
+    role      = state["occ"]
 
-    threats = [p for p in percepts if p.get("tag") == "Threat"]
+    threats    = [p for p in percepts if p.get("tag") == "Threat"]
     top_threat = max(threats, key=lambda p: p["threat"], default=None)
 
     # ── Interrupt: high threat ────────────────────────────────────────────────
     if interrupt and top_threat:
         thr = top_threat["threat"]
         if arch == "Brave" or "Brave" in traits:
-            action = "attack"
-            reasoning = (f"Tehdit yüksek ({thr:.2f}), ama korkuyu yeneceğim. "
-                         f"Saldırıyorum — bu benim görevim.")
-            emotion = "Aggressive"
-        elif arch == "Fearful" or emo["fear"] > 0.5:
-            action = "flee"
-            reasoning = (f"Tehdit {thr:.2f} seviyesinde. Kalbim hızlı çarpıyor. "
-                         f"Kaçmak zorundayım.")
-            emotion = "Fearful"
-        else:
-            action = "flee"
-            reasoning = f"Tehlike var ({top_threat['id']}). Geri çekiliyorum."
-            emotion = "Fearful"
-        return action, reasoning, None, emotion
-
-    # ── Critical vitals ───────────────────────────────────────────────────────
-    if v["hp"] < 25 and "medicine" in inv_ids:
-        return ("heal",
-                "Canım kritik seviyede. İlk önce kendimi iyileştirmeliyim.",
+            return ("attack",
+                    f"Tehdit yüksek ({thr:.2f}), ama korkuyu yeneceğim. Saldırıyorum — bu benim görevim.",
+                    None, "Aggressive")
+        return ("flee",
+                f"Tehdit {thr:.2f} seviyesinde. Kalbim hızlı çarpıyor. Kaçmak zorundayım.",
                 None, "Fearful")
 
+    # ── Critical HP ──────────────────────────────────────────────────────────
+    if v["hp"] < 25 and "medicine" in inv_ids:
+        return ("heal", "Canım kritik seviyede. İlk önce kendimi iyileştirmeliyim.", None, "Fearful")
+
+    # ── Hunger ───────────────────────────────────────────────────────────────
     if v["hun"] > 0.75:
         if "food" in inv_ids:
             return ("eat",
                     f"Açlık dayanılmaz oldu ({v['hun']:.2f}). Çantamdaki yiyeceği yiyeceğim.",
                     None, "Calm")
-        else:
-            food_percept = next((p for p in percepts if p.get("tag") == "Food"), None)
-            if food_percept:
-                return ("gather",
-                        f"Açım ama yiyeceğim yok. Yakınlardaki {food_percept['id']}'den toplayacağım.",
-                        None, "Calm")
-            return ("gather", "Yiyecek bulmam lazım, etrafı tarıyorum.", None, "Calm")
+        food_p = next((p for p in percepts if p.get("tag") == "Food"), None)
+        if food_p:
+            return ("gather",
+                    f"Açım ama yiyeceğim yok. Yakınlardaki {food_p['id']}'den toplayacağım.",
+                    None, "Calm")
+        return ("gather", "Yiyecek bulmam lazım, etrafı tarıyorum.", None, "Calm")
 
+    # ── Thirst ───────────────────────────────────────────────────────────────
+    if v["thi"] > 0.75:
+        if "water" in inv_ids:
+            return ("drink",
+                    f"Susuzluğum dayanılmaz oldu ({v['thi']:.2f}). Su içiyorum.",
+                    None, "Calm")
+        return ("gather", "Su bulmam lazım, kaynak arıyorum.", None, "Calm")
+
+    # ── Low energy ───────────────────────────────────────────────────────────
     if v["en"] < 0.25:
-        return ("sleep",
-                f"Enerjim bitti ({v['en']:.2f}). Dinlenmem şart.",
-                None, "Tired")
+        return ("sleep", f"Enerjim bitti ({v['en']:.2f}). Dinlenmem şart.", None, "Tired")
 
-    # ── Role-specific preferred actions ──────────────────────────────────────
-    role_action_map = {
-        "Priest": ("pray", "Günlük duamı yapmak istiyorum. Ruhum huzur buluyor.", "Devout"),
-        "Blacksmith": ("work", "Ocak hazır, işe devam.", None, "Focused"),
-        "Farmer": ("work", "Tarla bekliyor, çalışmam lazım.", None, "Focused"),
-        "Scholar": ("work", "Araştırmama devam edeceğim.", None, "Focused"),
+    # ── Role-preferred actions ────────────────────────────────────────────────
+    role_map = {
+        "Priest":     ("pray",  "Günlük duamı yapmak istiyorum. Ruhum huzur buluyor.",   None, "Devout"),
+        "Blacksmith": ("work",  "Ocak hazır, işe devam.",                                None, "Focused"),
+        "Farmer":     ("work",  "Tarla bekliyor, çalışmam lazım.",                       None, "Focused"),
+        "Scholar":    ("work",  "Araştırmama devam edeceğim.",                           None, "Focused"),
     }
-    if role in role_action_map:
-        act, rsn, *rest = role_action_map[role]
-        dlg = rest[0] if len(rest) > 0 else None
-        emo_lbl = rest[1] if len(rest) > 1 else "Calm"
-        if random.random() < 0.5:
-            return act, rsn, dlg, emo_lbl
+    if role in role_map and random.random() < 0.5:
+        return role_map[role]
 
-    # ── Social ────────────────────────────────────────────────────────────────
-    social_percept = next((p for p in percepts if p.get("tag") == "Social"), None)
-    if social_percept and emo["hap"] > 0.3 and random.random() < 0.3:
+    # ── Social ───────────────────────────────────────────────────────────────
+    social_p = next((p for p in percepts if p.get("tag") == "Social"), None)
+    if social_p and emo["hap"] > 0.3 and random.random() < 0.3:
         return ("socialize",
-                f"{social_percept['id']} yakında. Biraz sohbet etmek istiyorum.",
+                f"{social_p['id']} yakında. Biraz sohbet etmek istiyorum.",
                 random.choice(["Merhaba! Nasılsın?", "Ne haber?", "Güzel bir gün, değil mi?"]),
                 "Happy")
 
-    # ── Wander ───────────────────────────────────────────────────────────────
+    # ── Default wander ────────────────────────────────────────────────────────
     return ("walk_to",
             f"Belirli bir acilim yok. {state['pos']['zone']} civarında dolaşacağım.",
             None, "Calm")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Intent deviation selector (~15% of examples)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _select_action_with_deviation(state: dict) -> tuple[str, str, str | None, str] | None:
+    """
+    Return an intentional override of the biologically optimal action,
+    or None if no deviation case applies for this state.
+
+    Four deviation cases:
+      D1 – hun>0.65 + social percept → socialize (eating deferred)
+      D2 – en<0.35 + non-threat nearby percept → walk_to (curiosity)
+      D3 – work conditions met + low mood/anger → pray or socialize instead
+      D4 – gather condition met + social percept → stay in conversation
+    """
+    v        = state["vitals"]
+    emo      = state["emo"]
+    percepts = state["percepts"]
+    inv_ids  = [i["id"] for i in state["inv"]]
+    role     = state["occ"]
+
+    social_p  = next((p for p in percepts if p.get("tag") == "Social"), None)
+    non_threat = next((p for p in percepts if p.get("tag") != "Threat"), None)
+    sched_act = state["sched"]["act"]
+
+    cases = []
+
+    # D1: Hungry but social is active → consciously defer eating
+    if v["hun"] > 0.65 and social_p:
+        cases.append((
+            "socialize",
+            f"Gerçi açım ({v['hun']:.2f}) ama {social_p['id']} burada. Yemek biraz bekleyebilir, "
+            f"bu konuşma şu an daha önemli.",
+            random.choice(["Merhaba! Ne var ne yok?", "Seni görmek iyi oldu.", "Anlat bakalım!"]),
+            "Happy",
+        ))
+
+    # D2: Tired but something interesting nearby → curiosity wins
+    if v["en"] < 0.35 and non_threat and non_threat.get("tag") != "Threat":
+        cases.append((
+            "walk_to",
+            f"Yorgunum aslında ama {non_threat['id']}'yi merak ettim. "
+            f"Uyku biraz bekleyebilir, gidip bir bakayım.",
+            None,
+            "Calm",
+        ))
+
+    # D3: Should be working (schedule says work, energy ok) but mood is low → pray/socialize
+    if sched_act == "work" and v["en"] > 0.4 and (emo["hap"] < 0.15 or emo["ang"] > 0.55):
+        alt = "pray" if ("Devout" in state["traits"] or role == "Priest") else "socialize"
+        if alt == "pray":
+            cases.append((
+                "pray",
+                f"Çalışma saatim ama ruh halim yerinde değil (mutluluk:{emo['hap']:.2f}). "
+                f"Çalışmadan önce dua edip kendimi toparlayayım.",
+                None, "Calm",
+            ))
+        elif social_p:
+            cases.append((
+                "socialize",
+                f"Çalışmam gerekirdi ama moralim çok bozuk (öfke:{emo['ang']:.2f}). "
+                f"{social_p['id']} ile biraz konuşmak bana iyi gelir.",
+                random.choice(["Zor bir gün...", "Seninle konuşmam lazımdı."]),
+                "Calm",
+            ))
+
+    # D4: Gather conditions met but mid-conversation → stay and talk
+    if (v["hun"] > 0.3 or v["thi"] > 0.3) and "food" not in inv_ids and social_p:
+        cases.append((
+            "socialize",
+            f"Kaynak toplamam lazım ama {social_p['id']} ile konuşmanın ortasındayım. "
+            f"Önce bunu bitireyim, sonra gidip toplarım.",
+            random.choice(["Devam edelim...", "Biraz daha var."]),
+            "Calm",
+        ))
+
+    if not cases:
+        return None
+    return random.choice(cases)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -355,10 +456,21 @@ TEMPLATE = ("<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n"
             "{user}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
             "{assistant}<|eot_id|>")
 
+_DEVIATION_RATE = 0.15   # 15% of examples use intent deviation
+
 
 def build_example() -> dict:
     state = generate_npc_state()
-    action_id, reasoning, dialogue, emotion = _select_action(state)
+
+    # Choose path: deviation (~15%) or standard (~85%)
+    action_id, reasoning, dialogue, emotion = _select_action_standard(state)
+
+    if random.random() < _DEVIATION_RATE:
+        deviation = _select_action_with_deviation(state)
+        if deviation is not None:
+            action_id, reasoning, dialogue, emotion = deviation
+
+    assert action_id in NPC_SIM_ACTIONS, f"Invalid action: {action_id}"
 
     user_payload = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
     output = {
@@ -393,16 +505,16 @@ def generate_dataset(path: str, count: int, seed: int = 42) -> None:
             example = build_example()
             json.dump(example, f, ensure_ascii=False)
             f.write("\n")
-            if (i + 1) % 1000 == 0:
+            if (i + 1) % 2000 == 0:
                 print(f"  {i + 1}/{count}...")
     print(f"  Done → {os.path.getsize(path) // 1024} KB")
 
 
 if __name__ == "__main__":
-    base = os.path.dirname(os.path.abspath(__file__))
+    base     = os.path.dirname(os.path.abspath(__file__))
     data_dir = os.path.join(base, "..", "data")
     os.makedirs(data_dir, exist_ok=True)
 
     generate_dataset(os.path.join(data_dir, "train_v2.jsonl"), count=10000, seed=456234)
     generate_dataset(os.path.join(data_dir, "test_v2.jsonl"),  count=2000,  seed=984756)
-    print("\nAll done. New v2 datasets ready!")
+    print("\nAll done. v3 datasets ready (drink action + intent deviation + schedule field)!")
