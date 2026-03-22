@@ -5,6 +5,17 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.2] – 2026-03-22
+
+### Added
+- **Simulation Control Panel** — `server.py` now launches a configuration screen before starting. `initial_sim_hour`, `npc_move_speed`, and `npc_count` are now fully configurable.
+- **Action Duration Locks** — `ActionLock` enforced minimum durations for decisions, preventing logic oscillation. NPCs now commit to actions until exit conditions or hard interrupts occur.
+- **Time-of-Day Awareness** — Sleep and Work actions are strictly tied to a day/night schedule curve configured per occupation in `NPCSchedule`.
+- **Targeted Movement System** — `WalkToAction` now correctly guides NPCs to specific named coordinates defined in `WorldMap` (e.g. Market, Riverside) instead of wandering aimlessly.
+- **UI Redesign** — Transformed the dashboard canvas into a fully functional map drawing distinct zones and NPC paths. Inject interactive event coloration and expose deep diagnostic fields natively.
+
+---
+
 ## [1.0.1] – 2026-03-22
 
 ### Added

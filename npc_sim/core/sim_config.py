@@ -20,10 +20,13 @@ class SimulationConfig:
     tick_rate: float = 10.0
     day_length_seconds: float = 1440.0
     initial_time_scale: float = 1.0
+    initial_sim_hour: float = 6.0
 
     # ── World ──
     max_npc_count: int = 500
     spatial_grid_cell_size: float = 50.0
+    npc_count: int = 5
+    npc_move_speed: float = 5.0
 
     # ── Physiological decay rates (per sim-second) ──
     hunger_decay_rate: float = 0.001

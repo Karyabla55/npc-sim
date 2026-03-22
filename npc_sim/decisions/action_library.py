@@ -19,5 +19,11 @@ class ActionLibrary:
     def get_all(self) -> list[IAction]:
         return self._actions
 
+    def get(self, action_id: str) -> IAction | None:
+        for action in self._actions:
+            if action.action_id == action_id:
+                return action
+        return None
+
     def __repr__(self) -> str:
         return f"[ActionLibrary] {len(self._actions)} action(s)"

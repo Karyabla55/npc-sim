@@ -31,26 +31,35 @@ from npc_sim.core.sim_vector3 import SimVector3
 from npc_sim.simulation.simulation_manager import SimulationManager
 from npc_sim.npc.npc_factory import NPCFactory
 from npc_sim.npc.inventory import ItemIds
+from npc_sim.simulation.world_map import WorldMap
 from npc_sim.decisions.actions.builtin import (
     EatAction, DrinkAction, SleepAction, FleeAction, GatherAction, HealAction,
     AttackAction, SocializeAction, TradeAction, WorkAction, PrayAction, WalkToAction,
 )
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-SIM_RUN_HOURS   = 6.0
-SIM_SECONDS     = SIM_RUN_HOURS * 3600.0   # 21,600 sim-seconds
 TICK_RATE       = 10.0                      # ticks per real second (virtual)
 REAL_DELTA      = 1.0 / TICK_RATE          # 0.1s per tick
-TIME_SCALE      = 1.0                       # 1 sim-sec = 1 real-sec
-SEED            = 42
+
+import argparse
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Headless diagnostic run for NPC-Sim")
+    parser.add_argument("--hours", type=float, default=6.0, help="sim-hours to run (default=6)")
+    parser.add_argument("--speed", type=float, default=1.0, help="time_scale multiplier (default=1)")
+    parser.add_argument("--seed", type=int, default=42, help="rng seed (default=42)")
+    parser.add_argument("--npc-count", type=int, default=5, dest="npc_count", help="number of NPCs (default=5)")
+    return parser.parse_args()
 
 
-def build_simulation() -> SimulationManager:
+def build_simulation(args) -> SimulationManager:
     config = SimulationConfig(
-        seed=SEED,
+        seed=args.seed,
         tick_rate=TICK_RATE,
         day_length_seconds=1440.0,
-        initial_time_scale=TIME_SCALE,
+        initial_time_scale=args.speed,
+        initial_sim_hour=6.0,
+        npc_count=args.npc_count,
         logger_enabled=True,
     )
     mgr = SimulationManager(config)
@@ -63,17 +72,20 @@ def build_simulation() -> SimulationManager:
 
     rng = mgr.rng
 
-    # Spawn 5 archetypes in a ring
+    # Spawn archetypes in a ring
     factory_funcs = [
         NPCFactory.create_farmer,
         NPCFactory.create_guard,
         NPCFactory.create_merchant,
-        NPCFactory.create_civilian,   # closest to Scholar
-        NPCFactory.create_civilian,
+        NPCFactory.create_priest,
+        NPCFactory.create_scholar,
     ]
     archetype_labels = ["Farmer", "Guard", "Merchant", "Priest", "Scholar"]
 
-    for i, (fn, label) in enumerate(zip(factory_funcs, archetype_labels)):
+    for i in range(args.npc_count):
+        idx = i % len(factory_funcs)
+        fn = factory_funcs[idx]
+        label = archetype_labels[idx]
         npc = fn(rng)
         # Force occupation label for clarity
         npc.identity.occupation = label
@@ -89,43 +101,49 @@ def build_simulation() -> SimulationManager:
         npc.vitals.set_thirst(0.2)
         npc.vitals.set_energy(npc.vitals.max_energy * 0.8)
 
-        # Scatter in a ring around centre
-        angle = (2 * math.pi / 5) * i
-        radius = 20.0
-        npc.position = SimVector3(50.0 + math.cos(angle) * radius,
-                                  0.0,
-                                  50.0 + math.sin(angle) * radius)
+        # Assign physical home based on occupation
+        home = WorldMap.get_home_for_occupation(npc.identity.occupation)
+        npc.home_pos = home
+        
+        # Add slight jitter to position so they don't perfectly overlap
+        angle = (2 * math.pi / args.npc_count) * i if args.npc_count > 0 else 0
+        radius = 2.0
+        npc.position = SimVector3(home.x + math.cos(angle) * radius,
+                                  home.y,
+                                  home.z + math.sin(angle) * radius)
         mgr.add_npc(npc)
 
+    sim_seconds = args.hours * (config.day_length_seconds / 24.0)
     print(f"Simulation config: day={config.day_length_seconds}s "
           f"time_scale={config.initial_time_scale} "
           f"hunger_rate={config.hunger_decay_rate} "
           f"thirst_rate={config.thirst_decay_rate} "
           f"energy_rate={config.energy_decay_rate}")
     print(f"NPCs spawned: {[n.identity.display_name for n in mgr.world.all_npcs]}")
-    print(f"Target: {SIM_RUN_HOURS}h = {SIM_SECONDS:.0f} sim-seconds")
+    print(f"Target: {args.hours}h = {sim_seconds:.0f} sim-seconds")
     print(f"Log: {os.path.abspath(mgr.logger.log_path)}")
     print("-" * 60)
 
     return mgr
 
 
-def run(mgr: SimulationManager) -> None:
-    """Drive the simulation loop for exactly SIM_SECONDS sim-seconds."""
+def run(mgr: SimulationManager, args) -> None:
+    """Drive the simulation loop for exactly args.hours * configured sim-seconds."""
     sim_elapsed = 0.0
+    sim_seconds = args.hours * (mgr.config.day_length_seconds / 24.0)
     t0 = time.perf_counter()
     tick = 0
     report_interval = int(TICK_RATE * 60 * 30)  # print progress every 30 sim-min
 
-    while sim_elapsed < SIM_SECONDS:
+    while sim_elapsed < sim_seconds:
         mgr.tick(REAL_DELTA)
-        sim_elapsed += REAL_DELTA * TIME_SCALE
+        sim_elapsed += REAL_DELTA * args.speed
         tick += 1
 
         if tick % report_interval == 0:
-            h = sim_elapsed / 3600.0
+            h = sim_elapsed / (mgr.config.day_length_seconds / 24.0)
             alives = sum(1 for n in mgr.world.all_npcs if n.vitals.is_alive)
-            print(f"  [{h:.1f}h] tick={tick}  alive={alives}/5  "
+            print(f"  [{h:.1f}h] tick={tick}  alive={alives}/{args.npc_count}  "
                   f"sim_t={sim_elapsed:.0f}s")
 
     real_elapsed = time.perf_counter() - t0
@@ -239,7 +257,7 @@ def print_summary(log_path: str) -> None:
         ("Zero NPC deaths from hunger/thirst",
          len(hunger_deaths) == 0,
          f"Deaths: {hunger_deaths}" if hunger_deaths else ""),
-        ("All 5 NPCs alive at end",
+        (f"All {args.npc_count} NPCs alive at end",
          len(deaths) == 0,
          f"Dead: {[npc_names.get(d, d) for d in deaths]}"),
         ("DrinkAction present in distribution",
@@ -268,6 +286,7 @@ def print_summary(log_path: str) -> None:
 
 
 if __name__ == "__main__":
-    mgr = build_simulation()
-    run(mgr)
+    args = parse_args()
+    mgr = build_simulation(args)
+    run(mgr, args)
     print_summary(mgr.logger.log_path)

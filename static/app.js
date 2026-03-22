@@ -19,6 +19,21 @@ const EVENT_ICONS = {
     trade: '💰', work: '🔨', pray: '🙏', walkto: '🚶'
 };
 
+const ZONES = {
+    "Town Square": {x: 50, z: 50, radius: 10, color: 'rgba(255, 255, 255, 0.05)'},
+    "Farm": {x: 20, z: 80, radius: 12, color: 'rgba(251, 146, 60, 0.1)'},
+    "Barracks": {x: 80, z: 80, radius: 8, color: 'rgba(96, 165, 250, 0.1)'},
+    "Academy": {x: 80, z: 20, radius: 8, color: 'rgba(52, 211, 153, 0.1)'},
+    "Temple": {x: 20, z: 20, radius: 8, color: 'rgba(244, 114, 182, 0.1)'},
+    "Market": {x: 50, z: 40, radius: 8, color: 'rgba(251, 191, 36, 0.1)'},
+    "Tavern": {x: 60, z: 60, radius: 6, color: 'rgba(167, 139, 250, 0.1)'},
+    "Riverside": {x: 10, z: 50, radius: 12, color: 'rgba(56, 189, 248, 0.1)'},
+    "Forest Edge": {x: 50, z: 90, radius: 15, color: 'rgba(74, 222, 128, 0.1)'},
+    "Cemetery": {x: 90, z: 50, radius: 8, color: 'rgba(156, 163, 175, 0.1)'},
+};
+
+const npcTrails = {};
+
 // ── Init ──
 document.addEventListener('DOMContentLoaded', () => {
     canvas = document.getElementById('map-canvas');
@@ -46,6 +61,18 @@ function connectSocket() {
 
 function onTick(data) {
     state = data;
+    
+    // Update trails
+    if (state.npcs) {
+        state.npcs.forEach(npc => {
+            if (!npcTrails[npc.identity.npc_id]) npcTrails[npc.identity.npc_id] = [];
+            npcTrails[npc.identity.npc_id].push({x: npc.position.x, z: npc.position.z});
+            if (npcTrails[npc.identity.npc_id].length > 15) {
+                npcTrails[npc.identity.npc_id].shift();
+            }
+        });
+    }
+
     updateHeader();
     updatePopStats();
     updateNpcList();
@@ -115,7 +142,7 @@ function updateEventLog() {
         const hh = Math.floor(t / 60) % 24;
         const mm = Math.floor(t % 60);
         const ts = `${hh}:${String(mm).padStart(2, '0')}`;
-        html += `<div class="event-row">
+        html += `<div class="event-row event-${evType}">
             <span class="event-icon">${icon}</span>
             <span class="event-time">${ts}</span>
             <span class="event-desc">${ev.description || ev.event_type}</span>
@@ -153,16 +180,67 @@ function drawMap() {
         ctx.stroke();
     }
 
+    // Draw Zones
+    for (const [name, zone] of Object.entries(ZONES)) {
+        const zx = ox + zone.x * scale;
+        const zy = oy + zone.z * scale;
+        const zr = zone.radius * scale;
+        
+        ctx.beginPath();
+        ctx.arc(zx, zy, zr, 0, Math.PI * 2);
+        ctx.fillStyle = zone.color;
+        ctx.fill();
+        ctx.strokeStyle = zone.color.replace('0.1)', '0.3)').replace('0.05)', '0.2)');
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+        ctx.font = '10px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(name, zx, zy - zr - 4);
+    }
+
     // NPCs
     const npcs = state.npcs || [];
+    const currentTime = state.time || 0;
+    const recentEvents = state.recent_events || [];
+
     for (const npc of npcs) {
         const pos = npc.position || { x: 50, z: 50 };
+        const id = npc.identity?.npc_id;
         const sx = ox + pos.x * scale;
         const sy = oy + pos.z * scale;
         const occ = (npc.identity?.occupation || 'civilian').toLowerCase();
         const color = OCC_COLORS[occ] || '#a78bfa';
-        const isSelected = npc.identity?.npc_id === selectedNpcId;
+        const isSelected = id === selectedNpcId;
         const r = isSelected ? 8 : 5;
+
+        // Draw Trails
+        const trail = npcTrails[id];
+        if (trail && trail.length > 1) {
+            ctx.beginPath();
+            ctx.moveTo(ox + trail[0].x * scale, oy + trail[0].z * scale);
+            for (let i = 1; i < trail.length; i++) {
+                ctx.lineTo(ox + trail[i].x * scale, oy + trail[i].z * scale);
+            }
+            ctx.strokeStyle = color + '40'; // 25% opacity
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+
+        // Draw Destination Line
+        if (npc.destination) {
+            const dx = ox + npc.destination.x * scale;
+            const dy = oy + npc.destination.z * scale;
+            ctx.beginPath();
+            ctx.setLineDash([4, 4]);
+            ctx.moveTo(sx, sy);
+            ctx.lineTo(dx, dy);
+            ctx.strokeStyle = color + '80'; // 50% opacity dashed
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            ctx.setLineDash([]); // Reset
+        }
 
         // Glow
         const grd = ctx.createRadialGradient(sx, sy, 0, sx, sy, r * 3);
@@ -183,10 +261,27 @@ function drawMap() {
             ctx.stroke();
         }
 
+        // Map labels + speech bubble
+        ctx.textAlign = 'center';
+        
+        // Find recent speech/event bubble
+        const bubbleEvents = ['socialize', 'trade', 'pray'];
+        const recentEv = recentEvents.find(e => 
+            e.initiator_id === id && 
+            bubbleEvents.includes((e.event_type || '').toLowerCase()) && 
+            currentTime - e.timestamp < 10.0
+        );
+
+        if (recentEv) {
+            const icon = EVENT_ICONS[recentEv.event_type.toLowerCase()] || '💬';
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '14px sans-serif';
+            ctx.fillText(icon, sx + 10, sy - 15);
+        }
+
         // Name label
         ctx.fillStyle = '#e2e8f0';
         ctx.font = `${isSelected ? 'bold ' : ''}${isSelected ? 11 : 9}px Inter, sans-serif`;
-        ctx.textAlign = 'center';
         ctx.fillText(npc.identity?.display_name || '', sx, sy - r - 4);
 
         // Action label
@@ -258,10 +353,18 @@ function updateDetail() {
     html += `<div class="detail-grid">
         <span class="detail-label">ID</span><span class="detail-value" style="font-size:0.7rem">${npc.identity?.npc_id}</span>
         <span class="detail-label">Occupation</span><span class="detail-value">${npc.identity?.occupation}</span>
-        <span class="detail-label">Faction</span><span class="detail-value">${npc.identity?.faction}</span>
-        <span class="detail-label">Age</span><span class="detail-value">${npc.identity?.age}</span>
-        <span class="detail-label">Action</span><span class="detail-value" style="color:var(--accent-3)">${npc.current_action || 'Idle'}</span>
+        <span class="detail-label">Action</span><span class="detail-value" style="color:var(--accent-3);font-weight:700">${npc.current_action || 'Idle'}</span>
     </div>`;
+
+    // Active Goal
+    const activeGoal = npc.goals?.active?.[0]; // Assuming goals.to_dict() returns {active: [{desc...}]}
+    if (activeGoal) {
+        html += `<div class="section-title">Active Goal</div>`;
+        html += `<div style="background:var(--bg-card);border:1px solid var(--border);padding:0.4rem;border-radius:var(--radius-sm);font-size:0.75rem;">
+            <div style="font-weight:600;color:var(--accent-1);margin-bottom:0.2rem">📌 ${activeGoal.goal_type || 'Task'} (${Math.round((activeGoal.progress||0)*100)}%)</div>
+            <div style="color:var(--text-secondary)">${activeGoal.description || ''}</div>
+        </div>`;
+    }
 
     // Vitals
     html += `<div class="section-title">Vitals</div>`;
@@ -347,7 +450,6 @@ function togglePause() {
 }
 
 function changeSpeed(val) {
-    document.getElementById('speed-value').textContent = parseFloat(val).toFixed(1) + '×';
     fetch('/api/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -356,7 +458,6 @@ function changeSpeed(val) {
 }
 
 function resetSim() {
-    const seed = parseInt(document.getElementById('seed-input').value) || 42;
     isPaused = false;
     document.getElementById('btn-play').textContent = '▶ Play';
     document.getElementById('btn-play').classList.add('active');
@@ -365,7 +466,43 @@ function resetSim() {
     fetch('/api/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reset: true, seed: seed })
+        body: JSON.stringify({ reset: true })
+    }).then(() => {
+        document.getElementById('config-screen').style.display = 'flex';
+        state = {};
+        if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+        updateHeader();
+        updatePopStats();
+        updateNpcList();
+        updateEventLog();
+    });
+}
+
+function startSimulation() {
+    const data = {
+        npc_count: parseInt(document.getElementById('cfg-npc').value) || 5,
+        start_hour: document.getElementById('cfg-time').value || "06:00",
+        time_scale: parseFloat(document.getElementById('cfg-speed').value) || 1.0,
+        seed: document.getElementById('cfg-seed').value,
+        llm_enabled: document.getElementById('cfg-llm').checked,
+        logger_enabled: document.getElementById('cfg-log').checked
+    };
+    
+    document.getElementById('btn-play').textContent = '⏸ Pause';
+    document.getElementById('btn-play').classList.add('active');
+    isPaused = false;
+    document.getElementById('speed-select').value = data.time_scale;
+
+    fetch('/api/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    }).then(r => r.json()).then(res => {
+        if (!res.error) {
+            document.getElementById('config-screen').style.display = 'none';
+        } else {
+            alert(res.error);
+        }
     });
 }
 

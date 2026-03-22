@@ -402,6 +402,19 @@ body {
     flex: 1;
 }
 
+/* Event Types Coding */
+.event-eat .event-desc { color: #f59e0b; }
+.event-drink .event-desc { color: #3b82f6; }
+.event-sleep .event-desc { color: #a78bfa; }
+.event-work .event-desc { color: #06b6d4; }
+.event-socialize .event-desc { color: #ec4899; }
+.event-trade .event-desc { color: #fbbf24; }
+.event-combat .event-desc, .event-attack .event-desc { color: #ef4444; font-weight: 600; }
+.event-gather .event-desc { color: #10b981; }
+.event-heal .event-desc { color: #34d399; }
+.event-pray .event-desc { color: #f472b6; }
+.event-flee .event-desc { color: #f87171; }
+
 /* ── Population Stats Bar ── */
 .pop-stats {
     display: flex;
@@ -494,5 +507,26 @@ body {
         grid-template-columns: 1fr;
         grid-template-rows: 400px auto;
     }
-    .sidebar { grid-column: 1; grid-row: 2; max-height: none; }
 }
+
+/* ── Config Screen ── */
+.config-overlay {
+    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+    background: rgba(10, 13, 20, 0.9); z-index: 1000;
+    display: flex; align-items: center; justify-content: center;
+    backdrop-filter: blur(5px);
+}
+.config-card { width: 360px; padding: 2rem; }
+.config-card h2 { margin-bottom: 1.5rem; color: var(--text-accent); text-align: center; }
+.config-grid { 
+    display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: center; 
+}
+.config-grid input[type="number"], .config-grid input[type="time"], .config-grid select {
+    background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border);
+    padding: 0.4rem; border-radius: var(--radius-sm); font-family: 'Inter', sans-serif;
+    outline: none; width: 100%;
+}
+.config-grid input[type="checkbox"] { margin-left: 0.2rem; transform: scale(1.2); cursor: pointer; }
+.btn-primary { background: var(--accent-1); color: white; border-color: var(--accent-1); font-weight: 600; padding: 0.6rem; }
+.btn-primary:hover { filter: brightness(1.2); }
+

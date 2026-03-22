@@ -46,6 +46,7 @@ class SimulationManager:
             self.config.day_length_seconds,
             self.config.initial_time_scale,
         )
+        self.clock.set_initial_hour(self.config.initial_sim_hour)
         self.world = SimWorldAdapter(
             DictionaryGrid(self.config.spatial_grid_cell_size),
             event_log_capacity=500,
@@ -263,6 +264,10 @@ class SimulationManager:
                     self._last_reasoning[npc_id] = llm_ds.last_reasoning
                     self._last_dialogue[npc_id] = llm_ds.last_dialogue
                     self._last_emotion[npc_id] = llm_ds.last_emotion
+
+                if action_name == "Work":
+                    eff = max(0.05, npc.vitals.energy_norm)
+                    event_detail = f"work efficiency={eff:.0%}"
 
             # ── Zone resolution for logger ──
             zone_name = ""

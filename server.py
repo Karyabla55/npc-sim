@@ -5,15 +5,18 @@
 from __future__ import annotations
 import time
 import threading
+import math
 from flask import Flask, send_from_directory, jsonify, request
 from flask_socketio import SocketIO
 
 from npc_sim.core.sim_config import SimulationConfig
 from npc_sim.core.sim_vector3 import SimVector3
 from npc_sim.simulation.simulation_manager import SimulationManager
-from npc_sim.npc.npc_factory import NPCFactory
+from npc_sim.llm.world_registry import WorldRegistry
+from npc_sim.simulation.world_map import WorldMap
 from npc_sim.npc.inventory import ItemIds
 from npc_sim.events.stimulus import Stimulus, StimulusType
+from npc_sim.npc.npc_factory import NPCFactory
 from npc_sim.decisions.actions.builtin import (
     EatAction, DrinkAction, SleepAction, FleeAction, GatherAction, HealAction,
     AttackAction, SocializeAction, TradeAction, WorkAction, PrayAction, WalkToAction,
@@ -28,17 +31,22 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 manager: SimulationManager | None = None
 sim_thread: threading.Thread | None = None
 sim_running = False
-sim_speed: float = 1.0
 sim_paused = False
 
 
-def create_simulation(seed: int = 42) -> SimulationManager:
+def create_simulation(seed: int = 42, npc_count: int = 5, start_hour: float = 6.0, 
+                      time_scale: float = 1.0, llm_enabled: bool = False, 
+                      logger_enabled: bool = True) -> SimulationManager:
     config = SimulationConfig(
         seed=seed,
         tick_rate=10.0,
         day_length_seconds=1440.0,
-        initial_time_scale=1.0,
-        max_npc_count=50,
+        initial_time_scale=time_scale,
+        initial_sim_hour=start_hour,
+        npc_count=npc_count,
+        logger_enabled=logger_enabled,
+        llm_enabled=llm_enabled,
+        max_npc_count=max(50, npc_count * 2),
     )
     mgr = SimulationManager(config)
 
@@ -49,26 +57,36 @@ def create_simulation(seed: int = 42) -> SimulationManager:
 
     # Spawn diverse NPCs at spread positions
     rng = mgr.rng
-    npcs = [
-        NPCFactory.create_guard(rng, "Aldric", "City Watch"),
-        NPCFactory.create_merchant(rng, "Yusuf", "Merchant Guild"),
-        NPCFactory.create_civilian(rng, "Linh"),
-        NPCFactory.create_scholar(rng, "Elena", "Academy"),
-        NPCFactory.create_farmer(rng, "Tomás", "Farmers Guild"),
-        NPCFactory.create_priest(rng, "Sister Miriam", "Temple"),
-        NPCFactory.create_guard(rng, "Bjorn", "City Watch"),
-        NPCFactory.create_merchant(rng, "Fatima", "Merchant Guild"),
-        NPCFactory.create_civilian(rng, "Kenji"),
-        NPCFactory.create_farmer(rng, "Amara", "Farmers Guild"),
+    factory_funcs = [
+        NPCFactory.create_farmer,
+        NPCFactory.create_guard,
+        NPCFactory.create_merchant,
+        NPCFactory.create_priest,
+        NPCFactory.create_scholar,
     ]
+    archetype_labels = ["Farmer", "Guard", "Merchant", "Priest", "Scholar"]
+
+    npcs = []
+    for i in range(npc_count):
+        idx = i % len(factory_funcs)
+        fn = factory_funcs[idx]
+        label = archetype_labels[idx]
+        npc = fn(rng)
+        npc.identity.occupation = label
+        home = WorldMap.get_home_for_occupation(label)
+        npc.home_pos = home
+        npcs.append(npc)
 
     for i, npc in enumerate(npcs):
-        angle = (i / len(npcs)) * 6.283185
-        import math
-        radius = 20.0 + rng.next_float(0.0, 15.0)
-        x = 50.0 + math.cos(angle) * radius
-        z = 50.0 + math.sin(angle) * radius
-        npc.position = SimVector3(x, 0, z)
+        angle = (2 * math.pi / npc_count) * i if npc_count > 0 else 0
+        radius = 2.0
+        
+        npc.position = SimVector3(npc.home_pos.x + math.cos(angle) * radius,
+                                  npc.home_pos.y,
+                                  npc.home_pos.z + math.sin(angle) * radius)
+        
+        # Face origin roughly
+        npc.forward = (SimVector3(50, 0, 50) - npc.position).normalized()
         npc.inventory.add(ItemIds.FOOD, rng.next_int(1, 4))
         npc.inventory.add(ItemIds.WATER, rng.next_int(1, 3))
         npc.inventory.add(ItemIds.GOLD, rng.next_int(0, 3))
@@ -80,21 +98,21 @@ def create_simulation(seed: int = 42) -> SimulationManager:
 
 
 def simulation_loop():
-    global manager, sim_running, sim_paused, sim_speed
-    tick_interval_base = 0.1  # 100ms base interval
+    global manager, sim_running, sim_paused
+    tick_interval_base = 0.1  # 100ms base interval (tick_rate=10)
 
     while sim_running:
         if sim_paused or manager is None:
             time.sleep(0.1)
             continue
 
-        real_delta = tick_interval_base / max(0.1, sim_speed)
-        state = manager.tick(1.0 / manager.config.tick_rate)
+        real_delta = tick_interval_base
+        state = manager.tick(real_delta)
 
         if state:
             socketio.emit("tick", state)
 
-        time.sleep(max(0.016, real_delta))
+        time.sleep(tick_interval_base)
 
 
 # ── Routes ──
@@ -110,28 +128,66 @@ def get_state():
         return jsonify(manager.get_state_snapshot())
     return jsonify({})
 
+@app.route("/api/start", methods=["POST"])
+def start_sim():
+    global manager, sim_running, sim_thread, sim_paused
+    
+    if sim_running:
+        return jsonify({"error": "Simulation already running"}), 400
+        
+    data = request.json or {}
+    
+    start_hour_str = data.get("start_hour", "06:00")
+    try:
+        h, m = map(int, start_hour_str.split(":"))
+        start_hour = h + m / 60.0
+    except:
+        start_hour = 6.0
+        
+    seed = data.get("seed", 42)
+    if seed == "" or seed is None:
+        import random
+        seed = random.randint(1, 1000000)
+    else:
+        try: seed = int(seed)
+        except: seed = 42
+    
+    npc_count = int(data.get("npc_count", 5))
+    time_scale = float(data.get("time_scale", 1.0))
+    llm_enabled = bool(data.get("llm_enabled", False))
+    logger_enabled = bool(data.get("logger_enabled", True))
+    
+    manager = create_simulation(seed=seed, npc_count=npc_count, start_hour=start_hour, 
+                                time_scale=time_scale, llm_enabled=llm_enabled, 
+                                logger_enabled=logger_enabled)
+                                
+    sim_paused = False
+    sim_running = True
+    sim_thread = threading.Thread(target=simulation_loop, daemon=True)
+    sim_thread.start()
+    
+    return jsonify({"status": "started", "speed": manager.clock.time_scale})
+
 
 @app.route("/api/control", methods=["POST"])
 def control():
-    global sim_paused, sim_speed, manager, sim_running, sim_thread
+    global sim_paused, manager, sim_running, sim_thread
     data = request.json or {}
 
     if "paused" in data:
         sim_paused = data["paused"]
-    if "speed" in data:
-        sim_speed = max(0.1, min(float(data["speed"]), 100.0))
+    if "speed" in data and manager:
+        speed = max(0.1, min(float(data["speed"]), 300.0))
+        manager.clock.set_time_scale(speed)
     if "reset" in data and data["reset"]:
-        seed = data.get("seed", 42)
         sim_running = False
         if sim_thread:
             sim_thread.join(timeout=2)
-        manager = create_simulation(seed)
+        manager = None # Clear state for next /api/start
         sim_paused = False
-        sim_running = True
-        sim_thread = threading.Thread(target=simulation_loop, daemon=True)
-        sim_thread.start()
 
-    return jsonify({"paused": sim_paused, "speed": sim_speed})
+    current_speed = manager.clock.time_scale if manager else 1.0
+    return jsonify({"paused": sim_paused, "speed": current_speed})
 
 
 # ── SocketIO events ──
@@ -166,10 +222,6 @@ def on_inject_stimulus(data):
 # ── Main ──
 
 if __name__ == "__main__":
-    manager = create_simulation(seed=42)
-    sim_running = True
-    sim_thread = threading.Thread(target=simulation_loop, daemon=True)
-    sim_thread.start()
     print("\n  ╔══════════════════════════════════════════════╗")
     print("  ║     NPC-Sim  •  http://localhost:5000        ║")
     print("  ║     by Sadık Abdusselam Albayrak             ║")

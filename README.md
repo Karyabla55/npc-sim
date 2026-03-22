@@ -1,6 +1,6 @@
 # NPC-Sim
 
-**`npc_sim` · Version 1.0.1 · Python 3.10+**
+**`npc_sim` · Version 1.0.2 · Python 3.10+**
 
 > A **deterministic, civilization-scale NPC simulation framework** — originally conceived as a Unity package, now a fully standalone Python system with a local web dashboard and LLM-driven autonomous agent support.
 >
@@ -38,8 +38,9 @@ python run_diagnostic.py
 - **Trait System** — named traits (Brave, Greedy, Devout…) modify action weights
 
 ### 🌍 Civilization Systems
+- **World Map** — 10 distinctive zones (Town Square, Farm, Barracks, Market, etc.) natively bound to movement endpoints
 - **Inventory** — slot-based item system (food, water, medicine, gold, grain, tools, weapons)
-- **Daily Schedules** — work/sleep/social hours per occupation archetype
+- **Daily Schedules** — occupation-prescribed circadian sleep/work cycles that actively drive behavioral locks
 - **Factions** — asymmetric inter-faction disposition matrix with time-decay
 - **Population Stats** — per-tick aggregate metrics (health, hunger, happiness, famine/war flags)
 
@@ -57,11 +58,12 @@ python run_diagnostic.py
 | H3 | Priority request queue | `LLMRequestQueue` — interrupt=0, focused=1, normal=5, background=10; serial Ollama |
 | H4 | Guided retry | Invalid `action_id` → one corrective prompt before fallback to `UtilityEvaluator` |
 
-### 🌐 Web Dashboard
-- Real-time 2D spatial map with colour-coded NPC dots
-- NPC detail panel: vitals, Big Five, emotions, inventory, memories
-- Live event log, population stats, speed controls
-- LLM inner monologue display, speech bubbles, stats badge
+### 🌐 Web Dashboard & Simulation Control Panel
+- **Pre-Simulation Tuning** — adjust start time, tick speed, and NPC density on launch
+- **Real-Time World Map** — 2D canvas dynamically rendering 10 distinct zones, mapped NPC trails, and targeted destination lines
+- **Deep Agent Inspection** — detailed lateral panels featuring psychological breakdowns, memory snapshots, active goal progress, and inventory stacks
+- **Interactive Ticking** — pause, step, speed control (1x to 300x), and arbitrary state resets
+- **Live Event Log** — color-coded conversational balloons and chronological timeline logs
 
 ### ⚡ Performance & Determinism
 - Same seed + same config → identical replay

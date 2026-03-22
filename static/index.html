@@ -10,6 +10,29 @@
 </head>
 <body>
 
+<!-- ═══ Config Screen ═══ -->
+<div id="config-screen" class="config-overlay">
+    <div class="card config-card">
+        <h2>Simulation Setup</h2>
+        <div class="config-grid">
+            <label>NPC Count</label><input type="number" id="cfg-npc" value="5" min="1" max="50">
+            <label>Start Time</label><input type="time" id="cfg-time" value="06:00">
+            <label>Speed</label>
+            <select id="cfg-speed">
+                <option value="1">1×</option>
+                <option value="5">5×</option>
+                <option value="10">10×</option>
+                <option value="60">60×</option>
+                <option value="300">300×</option>
+            </select>
+            <label>Seed</label><input type="number" id="cfg-seed" placeholder="Random">
+            <label>Enable LLM</label><input type="checkbox" id="cfg-llm">
+            <label>Log Enabled</label><input type="checkbox" id="cfg-log" checked>
+        </div>
+        <button class="btn btn-primary" onclick="startSimulation()" style="width:100%; margin-top:1.5rem;">Start Simulation</button>
+    </div>
+</div>
+
 <!-- ═══ Header ═══ -->
 <header class="header" id="header">
     <div class="header-title">
@@ -40,11 +63,15 @@
         <button class="btn active" id="btn-play" onclick="togglePause()">▶ Play</button>
         <div class="speed-control">
             <label>Speed</label>
-            <input type="range" id="speed-slider" min="0.1" max="50" step="0.1" value="1" oninput="changeSpeed(this.value)">
-            <span class="speed-value" id="speed-value">1.0×</span>
+            <select id="speed-select" onchange="changeSpeed(this.value)" style="background:transparent; color:var(--text-accent); border:none; outline:none; font-family:'JetBrains Mono', monospace; font-weight:600; cursor:pointer;">
+                <option value="1">1×</option>
+                <option value="5">5×</option>
+                <option value="10">10×</option>
+                <option value="60">60×</option>
+                <option value="300">300×</option>
+            </select>
         </div>
-        <input type="number" class="seed-input" id="seed-input" value="42" placeholder="Seed">
-        <button class="btn" onclick="resetSim()">⟲ Reset</button>
+        <button class="btn danger" onclick="resetSim()">🛑 Stop & Reset</button>
         <button class="btn" id="btn-inject" onclick="toggleInject()">💫 Inject</button>
     </div>
 </header>

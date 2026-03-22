@@ -5,10 +5,12 @@
 from __future__ import annotations
 from npc_sim.decisions.action import IAction
 from npc_sim.decisions.action_context import ActionContext
+from npc_sim.decisions.action_lock import ActionLock
 from npc_sim.events.sim_event import SimEvent
 from npc_sim.npc.inventory import ItemIds
 from npc_sim.npc.goals import GoalType
 from npc_sim.core.sim_vector3 import SimVector3
+from npc_sim.simulation.world_map import WorldMap
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -23,6 +25,11 @@ class EatAction(IAction):
     _HUNGER_REDUCTION = 0.55
     _ENERGY_GAIN_FRAC = 0.08
     _HAPPINESS_GAIN = 0.08
+
+    def create_lock(self) -> ActionLock:
+        return ActionLock(self.action_id, 30.0, 
+                          lambda ctx: ctx.self_npc.vitals.hunger < 0.20, 
+                          interrupt_allowed=False)
 
     def is_valid(self, ctx: ActionContext) -> bool:
         if ctx.self_npc.vitals.hunger < self._HUNGER_THRESHOLD:
@@ -65,6 +72,11 @@ class DrinkAction(IAction):
     _THIRST_REDUCTION = 0.60
     _HAPPINESS_GAIN = 0.05
 
+    def create_lock(self) -> ActionLock:
+        return ActionLock(self.action_id, 30.0, 
+                          lambda ctx: ctx.self_npc.vitals.thirst < 0.20, 
+                          interrupt_allowed=False)
+
     def is_valid(self, ctx: ActionContext) -> bool:
         if ctx.self_npc.vitals.thirst < self._THIRST_THRESHOLD:
             return False
@@ -98,6 +110,11 @@ class DrinkAction(IAction):
 class SleepAction(IAction):
     action_id = "sleep"
     action_type = "Sleep"
+
+    def create_lock(self) -> ActionLock:
+        return ActionLock(self.action_id, 3600.0, 
+                          lambda ctx: ctx.self_npc.vitals.energy_norm >= 0.95, 
+                          interrupt_allowed=True)
 
     def is_valid(self, ctx: ActionContext) -> bool:
         v = ctx.self_npc.vitals
@@ -133,6 +150,11 @@ class FleeAction(IAction):
     action_id = "flee"
     action_type = "Flee"
 
+    def create_lock(self) -> ActionLock:
+        return ActionLock(self.action_id, 0.0, 
+                          lambda ctx: not ctx.has_percept("Threat"), 
+                          interrupt_allowed=False)
+
     def is_valid(self, ctx: ActionContext) -> bool:
         return ctx.has_percept("Threat")
 
@@ -166,6 +188,17 @@ class FleeAction(IAction):
 class GatherAction(IAction):
     action_id = "gather"
     action_type = "Gather"
+
+    def create_lock(self) -> ActionLock:
+        def exit_cond(ctx):
+            v, inv = ctx.self_npc.vitals, ctx.self_npc.inventory
+            # Exit if inventory full or needs are met
+            needs_met = v.hunger < 0.3 and v.thirst < 0.3
+            inv_full = (inv.get_amount(ItemIds.FOOD) >= 5 or inv.get_amount(ItemIds.WATER) >= 5)
+            # Actually, the prompt says: exit=inv>=5 OR need<0.3
+            return inv_full or needs_met
+
+        return ActionLock(self.action_id, 120.0, exit_cond, interrupt_allowed=True)
 
     def is_valid(self, ctx: ActionContext) -> bool:
         v = ctx.self_npc.vitals
@@ -216,6 +249,11 @@ class HealAction(IAction):
     action_id = "heal"
     action_type = "Heal"
 
+    def create_lock(self) -> ActionLock:
+        return ActionLock(self.action_id, 10.0, 
+                          lambda ctx: ctx.self_npc.vitals.health >= ctx.self_npc.vitals.max_health * 0.9, 
+                          interrupt_allowed=False)
+
     def is_valid(self, ctx: ActionContext) -> bool:
         v = ctx.self_npc.vitals
         return v.health < v.max_health * 0.7 and ctx.self_npc.inventory.has(ItemIds.MEDICINE)
@@ -242,6 +280,11 @@ class HealAction(IAction):
 class AttackAction(IAction):
     action_id = "attack"
     action_type = "Attack"
+
+    def create_lock(self) -> ActionLock:
+        return ActionLock(self.action_id, 10.0, 
+                          lambda ctx: not ctx.has_percept("Threat"), 
+                          interrupt_allowed=False)
 
     def is_valid(self, ctx: ActionContext) -> bool:
         if not ctx.has_percept("Threat"):
@@ -300,6 +343,11 @@ class SocializeAction(IAction):
     action_id = "socialize"
     action_type = "Socialize"
 
+    def create_lock(self) -> ActionLock:
+        return ActionLock(self.action_id, 300.0, 
+                          lambda ctx: not ctx.has_percept("Ally") and not ctx.has_percept("NPC"), 
+                          interrupt_allowed=True)
+
     def is_valid(self, ctx: ActionContext) -> bool:
         return ctx.has_percept("Ally") or ctx.has_percept("NPC")
 
@@ -334,6 +382,11 @@ class SocializeAction(IAction):
 class TradeAction(IAction):
     action_id = "trade"
     action_type = "Trade"
+
+    def create_lock(self) -> ActionLock:
+        return ActionLock(self.action_id, 60.0, 
+                          lambda ctx: not ctx.has_percept("Ally") and not ctx.has_percept("NPC"), 
+                          interrupt_allowed=True)
 
     def is_valid(self, ctx: ActionContext) -> bool:
         npc = ctx.self_npc
@@ -373,8 +426,15 @@ class WorkAction(IAction):
     action_id = "work"
     action_type = "Work"
 
+    def create_lock(self) -> ActionLock:
+        return ActionLock(self.action_id, 1800.0, 
+                          lambda ctx: not self.is_valid(ctx) or ctx.self_npc.schedule.preference_at("work", ctx.sim_day_hour) < 0.2, 
+                          interrupt_allowed=True)
+
     def is_valid(self, ctx: ActionContext) -> bool:
-        return ctx.self_npc.vitals.energy_norm > 0.2
+        if ctx.self_npc.vitals.energy_norm <= 0.05:
+            return False
+        return True
 
     def evaluate(self, ctx: ActionContext) -> float:
         sched = ctx.self_npc.schedule.preference_at("work", ctx.sim_day_hour)
@@ -384,21 +444,26 @@ class WorkAction(IAction):
     def execute(self, ctx: ActionContext) -> None:
         npc = ctx.self_npc
         npc.vitals.consume_energy(5.0 * ctx.delta_time)
+        
+        efficiency = max(0.05, npc.vitals.energy_norm)
         occ = npc.identity.occupation.lower()
-        if occ == "farmer":
-            npc.inventory.add(ItemIds.GRAIN, 1)
-        elif occ == "merchant":
-            npc.inventory.add(ItemIds.GOLD, 1)
-        elif occ == "guard":
-            pass
-        elif occ == "scholar":
-            pass
-        else:
-            npc.inventory.add(ItemIds.TOOLS, 1)
+        
+        if ctx.rng.chance(efficiency):
+            if occ == "farmer":
+                npc.inventory.add(ItemIds.GRAIN, 1)
+            elif occ == "merchant":
+                npc.inventory.add(ItemIds.GOLD, 1)
+            elif occ == "guard":
+                pass
+            elif occ == "scholar":
+                pass
+            else:
+                npc.inventory.add(ItemIds.TOOLS, 1)
+                
         if ctx.world:
             ctx.world.publish_event(SimEvent(
                 self.action_type, npc.identity.npc_id, None,
-                f"{npc.identity.display_name} works as {npc.identity.occupation}.",
+                f"{npc.identity.display_name} works as {npc.identity.occupation}. (work efficiency={efficiency:.0%})",
                 0.1, ctx.current_time, npc.position, ctx.rng, "economy"))
 
 
@@ -409,6 +474,11 @@ class WorkAction(IAction):
 class PrayAction(IAction):
     action_id = "pray"
     action_type = "Pray"
+
+    def create_lock(self) -> ActionLock:
+        return ActionLock(self.action_id, 600.0, 
+                          lambda ctx: ctx.self_npc.vitals.stress < 0.2, 
+                          interrupt_allowed=True)
 
     def is_valid(self, ctx: ActionContext) -> bool:
         return ctx.self_npc.traits.has("Devout") or ctx.self_npc.vitals.stress > 0.5
@@ -439,33 +509,70 @@ class WalkToAction(IAction):
     action_id = "walk_to"
     action_type = "WalkTo"
 
-    # Maps GoalType string → percept tag to look for
-    _GOAL_TAG_MAP = {
-        GoalType.FIND_FOOD:  "Food",
-        GoalType.FIND_WATER: "Water",
-        GoalType.HEAL:       "Resource",
-    }
+    @classmethod
+    def _get_target(cls, ctx: ActionContext) -> SimVector3 | None:
+        v = ctx.self_npc.vitals
+        inv = ctx.self_npc.inventory
+        
+        # 1. Desperate needs -> specific zones
+        if v.hunger > 0.65 and not inv.has(ItemIds.FOOD):
+            return WorldMap.get_zone("Market")
+        if v.thirst > 0.65 and not inv.has(ItemIds.WATER):
+            return WorldMap.get_zone("Riverside")
+            
+        # 2. Schedule-driven Movement
+        sleep_pref = ctx.self_npc.schedule.preference_at("sleep", ctx.sim_day_hour)
+        if sleep_pref > 0.8:
+            return ctx.self_npc.home_pos
+
+        work_pref = ctx.self_npc.schedule.preference_at("work", ctx.sim_day_hour)
+        if work_pref > 0.8:
+            # Send them to Town Square to socialize/work unless they are farmers
+            if ctx.self_npc.identity.occupation.lower() == "farmer":
+                return WorldMap.get_zone("Farm")
+            return WorldMap.get_zone("Town Square")
+            
+        return WorldMap.get_zone("Tavern")
+
+    def create_lock(self) -> ActionLock:
+        def exit_cond(ctx):
+            target = self._get_target(ctx)
+            if not target:
+                return True
+            return SimVector3.distance(ctx.self_npc.position, target) < 2.0
+
+        return ActionLock(self.action_id, 0.0, exit_cond, interrupt_allowed=True)
 
     def is_valid(self, ctx: ActionContext) -> bool:
-        return True  # Always valid as fallback idle/wander
+        return True
 
     def evaluate(self, ctx: ActionContext) -> float:
         v   = ctx.self_npc.vitals
         inv = ctx.self_npc.inventory
-        # High urgency only when desperate AND inventory empty AND a percept exists to
-        # actually move toward.  Cap at 0.5 so Gather (0.85 when inv empty) always wins
-        # when gathering is available — WalkTo wanders randomly but can't produce items.
+        
+        target = self._get_target(ctx)
+        if not target:
+            return 0.05
+            
+        dist = SimVector3.distance(ctx.self_npc.position, target)
+        if dist < 2.0:
+            return 0.0  # Already there
+            
         if v.hunger > 0.65 and not inv.has(ItemIds.FOOD):
-            target = ctx.get_top_percept("Food")
-            if target:
-                return min(1.0, v.hunger * 0.85)   # directed move to Food percept
-            return min(0.5, v.hunger * 0.5)         # random wander — Gather should win
+            return min(1.0, v.hunger * 0.85)
         if v.thirst > 0.65 and not inv.has(ItemIds.WATER):
-            target = ctx.get_top_percept("Water")
-            if target:
-                return min(1.0, v.thirst * 0.85)    # directed move to Water percept
-            return min(0.5, v.thirst * 0.5)         # random wander — Gather should win
-        return 0.05   # low baseline — pure wandering
+            return min(1.0, v.thirst * 0.85)
+            
+        # If they need to sleep, and they aren't home, walk home!
+        sleep_pref = ctx.self_npc.schedule.preference_at("sleep", ctx.sim_day_hour)
+        if sleep_pref > 0.8 and dist >= 2.0:
+            return 0.90 # High priority to go home to sleep
+            
+        work_pref = ctx.self_npc.schedule.preference_at("work", ctx.sim_day_hour)
+        if work_pref > 0.8 and dist >= 2.0:
+            return 0.75 # Good priority to commute
+            
+        return 0.35 # Default wandering to Tavern
 
     def execute(self, ctx: ActionContext) -> None:
         npc = ctx.self_npc
@@ -473,21 +580,16 @@ class WalkToAction(IAction):
             return
 
         speed = 2.0
-        direction = None
-
-        # Move toward a percept matching the top active goal
-        top_goal = npc.goals.get_top_goal()
-        if top_goal:
-            target_tag = self._GOAL_TAG_MAP.get(top_goal.goal_type)
-            if target_tag:
-                target_percept = ctx.get_top_percept(target_tag)
-                if target_percept:
-                    delta = target_percept.last_known_position - npc.position
-                    if delta.magnitude > 0.5:  # don't jitter when already there
-                        direction = delta.normalized()
-
-        # Fallback: random wander
-        if direction is None:
+        target = self._get_target(ctx)
+        npc.current_destination = target
+        
+        if target:
+            delta = target - npc.position
+            if delta.magnitude > 0.5:
+                direction = delta.normalized()
+            else:
+                direction = SimVector3(ctx.rng.next_float(-1.0, 1.0), 0, ctx.rng.next_float(-1.0, 1.0)).normalized()
+        else:
             dx = ctx.rng.next_float(-1.0, 1.0)
             dz = ctx.rng.next_float(-1.0, 1.0)
             direction = SimVector3(dx, 0, dz).normalized()

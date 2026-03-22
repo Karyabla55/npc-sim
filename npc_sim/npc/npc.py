@@ -52,6 +52,8 @@ class NPC:
 
         # World state
         self.position = SimVector3.ZERO
+        self.home_pos = SimVector3.ZERO
+        self.current_destination = None
         self.forward = SimVector3(0, 0, 1)
         self.is_active = True
 
@@ -185,6 +187,7 @@ class NPC:
             "inventory": self.inventory.to_dict(),
             "traits": self.traits.to_dict(),
             "position": {"x": round(self.position.x, 2), "y": round(self.position.y, 2), "z": round(self.position.z, 2)},
+            "destination": {"x": round(self.current_destination.x, 2), "y": round(self.current_destination.y, 2), "z": round(self.current_destination.z, 2)} if self.current_destination else None,
             "is_active": self.is_active,
             "schedule": self.schedule.to_dict(),
         }
