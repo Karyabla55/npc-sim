@@ -99,3 +99,4 @@ venv.bak/
 logs/
 Stateful_NPC/data/
 *.ipynb
+Model/

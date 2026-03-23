@@ -37,6 +37,49 @@ def t3():
     assert resp.action_id == "gather", f"Expected gather, got {resp.action_id}"
 check("MockBackend", t3)
 
+# Test 3b: OllamaBackend — gerçek API çağrısı
+def t3b():
+    from npc_sim.llm.llm_backend import OllamaBackend
+
+    backend = OllamaBackend(
+        model="hermes-lora",                 # ollama create ile verdiğin model adı
+        base_url="http://localhost:11434",   # /v1 olmadan
+    )
+
+    # Ollama servisi ayakta mı?
+    assert backend.is_available(), (
+        "Ollama servisi bulunamadı! 'ollama serve' komutunu çalıştır."
+    )
+
+    # NPC karar payload'ı
+    payload = {
+        "npc_id": "npc_smoke_01",
+        "hunger": 0.75,
+        "energy": 0.4,
+        "social_need": 0.2,
+        "location": {"zone": "forest", "landmark": "old_mill"},
+        "nearby_npcs": ["npc_02"],
+        "valid_actions": ["gather", "eat", "sleep", "socialize", "walk_to"],
+    }
+
+    import json
+    resp = backend.call("npc_smoke_01", json.dumps(payload, ensure_ascii=False), timeout=10.0)
+
+    # Temel doğrulamalar
+    assert resp.npc_id,    "npc_id boş döndü"
+    assert resp.action_id, "action_id boş döndü"
+    assert resp.action_id in payload["valid_actions"], (
+        f"Geçersiz action_id: '{resp.action_id}' — valid_actions: {payload['valid_actions']}"
+    )
+
+    print(f"    npc={resp.npc_id}")
+    print(f"    action={resp.action_id}  target={resp.target_id}")
+    print(f"    emotion={resp.emotion}")
+    print(f"    reasoning={resp.reasoning[:80]}...")
+    print(f"    latency={resp.latency_ms:.0f}ms")
+
+check("OllamaBackend (gerçek API)", t3b)
+
 # Test 4: SimConfig LLM fields
 def t4():
     from npc_sim.core.sim_config import SimulationConfig
@@ -60,7 +103,7 @@ check("SimulationManager LLM api", t5)
 def t6():
     import json, random, os
     random.seed(42)
-    sys.path.insert(0, r"d:\DeepLearning\Projects\NLP_ABM_Sim\Stateful_NPC\generator")
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "Stateful_NPC", "generator"))
     from npc_sim_generator_v2 import build_example, NPC_SIM_ACTIONS
     ex = build_example()
     assert "text" in ex

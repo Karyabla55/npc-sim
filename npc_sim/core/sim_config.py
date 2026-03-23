@@ -60,7 +60,7 @@ class SimulationConfig:
     # ── LLM Integration ──
     llm_enabled: bool = False
     llm_backend: str = "ollama"                     # "ollama" | "mock"
-    llm_model: str = "npc-sim-decision:latest"      # custom fine-tuned model name
+    llm_model: str = "hermes-lora"                  # custom fine-tuned model name
     llm_tick_every: int = 5                         # call LLM every N ticks
     llm_timeout_seconds: float = 3.0
     llm_max_concurrent: int = 1                     # 1 = serial (Ollama VRAM safe)

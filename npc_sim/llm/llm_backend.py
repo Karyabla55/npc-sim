@@ -89,8 +89,8 @@ class OllamaBackend(ILLMBackend):
     Body: {"model": ..., "messages": [...], "stream": false, "format": "json"}
     """
 
-    def __init__(self, model: str = "npc-sim-decision:latest",
-                 base_url: str = "http://localhost:11434/v1"):
+    def __init__(self, model: str = "hermes-lora",
+                 base_url: str = "http://localhost:11434"):
         self.model = model
         self.base_url = base_url.rstrip("/")
         self._chat_url = f"{self.base_url}/api/chat"
