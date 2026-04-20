@@ -1,18 +1,22 @@
 # Copyright 2025-2026 Sadık Abdusselam Albayrak
 # Licensed under the Apache License, Version 2.0
 """
-Upgraded NPC-Sim dataset generator v3.
+NPC-Sim dataset generator v4 -- Dual-LLM Pipeline Edition.
 
-Changes vs v2:
-  - Added "drink" action (mirrors eat, consumes water)
-  - Added water to NPC inventory generation
-  - ~15% intent deviation examples: biologically optimal action overridden
-    by social context, curiosity, low mood, or active conversation
-  - "sched" field in NPC state payload (P3 Option B: schedule as soft suggestion)
-  - Corrected dataset counts: 20k train / 2k test
+Changes vs v3:
+  - generate_cot_reasoning(): 3-5 sentence Turkish CoT expansion per example
+  - Deviation cases D5-D8: dual-crisis, conflicted courage, schedule override,
+    trauma-influenced flee
+  - Oversampling extended: Fearfulxsocial (2x), Honorablexattack-trigger (2x)
+  - _paraphrase(): lightweight Turkish synonym/structure augmentation
+  - generate_formatter_dataset(): derives (cot_reasoning, json) training pairs
+    with 15-20% paraphrase augmentation for Component B robustness
+  - Reasoner corpus: 10k train / 2k test
+  - Formatter corpus: auto-derived, ~23-24k examples after augmentation
 
-Output format: Llama-3 / custom model instruct chat format (JSONL)
-Each line: {"text": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>..."}
+Output format:
+  train_reasoner.jsonl  -- Llama-3 instruct format; assistant field = cot_reasoning
+  train_formatter.jsonl -- Llama-3 instruct format; user = cot_reasoning, assistant = JSON
 """
 
 from __future__ import annotations
@@ -229,7 +233,7 @@ def generate_npc_state() -> dict:
         val  = -0.8 if "Threat" in percepts[0]["tag"] else round(random.uniform(-0.4, 0.4), 2)
         beliefs.append({"subj": subj, "conf": conf, "val": val})
 
-    # Inventory — food AND water
+    # Inventory -- food AND water
     inv = []
     if random.random() < 0.6:
         inv.append({"id": "food",  "n": random.randint(1, 5)})
@@ -277,7 +281,7 @@ def generate_npc_state() -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _select_action_standard(state: dict) -> tuple[str, str, str | None, str]:
-    """Return (action_id, reasoning, dialogue, emotion) — biologically optimal path."""
+    """Return (action_id, reasoning, dialogue, emotion) -- biologically optimal path."""
     v        = state["vitals"]
     emo      = state["emo"]
     percepts = state["percepts"]
@@ -295,7 +299,7 @@ def _select_action_standard(state: dict) -> tuple[str, str, str | None, str]:
         thr = top_threat["threat"]
         if arch == "Brave" or "Brave" in traits:
             return ("attack",
-                    f"Tehdit yüksek ({thr:.2f}), ama korkuyu yeneceğim. Saldırıyorum — bu benim görevim.",
+                    f"Tehdit yüksek ({thr:.2f}), ama korkuyu yeneceğim. Saldırıyorum -- bu benim görevim.",
                     None, "Aggressive")
         return ("flee",
                 f"Tehdit {thr:.2f} seviyesinde. Kalbim hızlı çarpıyor. Kaçmak zorundayım.",
@@ -355,6 +359,163 @@ def _select_action_standard(state: dict) -> tuple[str, str, str | None, str]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Turkish synonym table for paraphrase augmentation
+# ─────────────────────────────────────────────────────────────────────────────
+
+_TR_SYNONYMS: dict[str, list[str]] = {
+    "dayanılmaz":  ["katlanılmaz", "çekilmez", "tahammül edilemez"],
+    "kritik":      ["tehlikeli", "acil", "ciddi"],
+    "lazım":       ["gerekiyor", "şart", "zorunlu"],
+    "zorundayım":  ["mecburum", "yapmak durumundayım", "yapmalıyım"],
+    "dinlenmem":   ["uyumam", "istirahat etmem", "ara vermem"],
+    "bitti":       ["tükendi", "kalmadı", "sona erdi"],
+    "yiyeceğim":   ["alacağım", "tüketeceğim", "kullanacağım"],
+    "kaçmak":      ["uzaklaşmak", "geri çekilmek", "sıvışmak"],
+    "tehdit":      ["tehlike", "risk", "tehlike unsuru"],
+    "hissediyorum":["duyuyorum", "algılıyorum", "fark ediyorum"],
+    "açlık":       ["açım", "midem boş", "yiyecek ihtiyacım var"],
+    "susuzluk":    ["susadım", "su ihtiyacım var", "boğazım kurudu"],
+    "görevim":     ["sorumluluğum", "yükümlülüğüm", "vazifem"],
+    "pişman":      ["üzgün", "kötü hissediyorum", "vicdanım rahat değil"],
+    "güçlü":       ["sağlam", "kuvvetli", "enerjik"],
+    "yorgun":      ["bitik", "tükenmiş", "halsiz"],
+    "moralim":     ["ruh halim", "psikolojim", "durumum"],
+    "kişiliğim":   ["karakterim", "yapım", "özüm"],
+}
+
+
+def _paraphrase(text: str) -> str:
+    """Apply lightweight Turkish synonym substitution to diversify formatter training."""
+    words = text.split()
+    result = []
+    for word in words:
+        clean = word.rstrip(",.:;!?").rstrip()
+        suffix = word[len(clean):]
+        candidates = _TR_SYNONYMS.get(clean.lower())
+        if candidates and random.random() < 0.35:
+            replacement = random.choice(candidates)
+            # Preserve capitalization of first word in sentence
+            if word[0].isupper():
+                replacement = replacement[0].upper() + replacement[1:]
+            result.append(replacement + suffix)
+        else:
+            result.append(word)
+    return " ".join(result)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CoT (Chain-of-Thought) reasoning expansion -- 3-5 sentence Turkish
+# ─────────────────────────────────────────────────────────────────────────────
+
+def generate_cot_reasoning(
+    state: dict,
+    action_id: str,
+    base_reasoning: str,
+) -> str:
+    """Expand the 1-2 sentence base reasoning into a 3-5 sentence Turkish CoT.
+
+    Each sentence targets one cognitive layer:
+      S1 -- primary need / threat assessment
+      S2 -- alternative consideration (what I could do instead)
+      S3 -- trait / emotion influence
+      S4 -- final decision rationale
+      S5 -- memory influence (only if a strong memory exists)
+    """
+    v        = state["vitals"]
+    emo      = state["emo"]
+    arch     = state["arch"]
+    traits   = state["traits"]
+    memories = state["memories"]
+    percepts = state["percepts"]
+    role     = state["occ"]
+    sched    = state["sched"]
+    inv_ids  = [i["id"] for i in state["inv"]]
+
+    sentences: list[str] = []
+
+    # ── S1: Primary driver ───────────────────────────────────────────────────
+    sentences.append(base_reasoning.rstrip(".!") + ".")
+
+    # ── S2: Alternative consideration ────────────────────────────────────────
+    alternatives: list[str] = []
+    if action_id != "eat" and v["hun"] > 0.50:
+        alternatives.append("yiyecek bulmaya gidebilirdim")
+    if action_id != "sleep" and v["en"] < 0.40:
+        alternatives.append("dinlenebilirdim")
+    if action_id != "flee" and any(p.get("tag") == "Threat" for p in percepts):
+        alternatives.append("kaçmayı düşünebilirdim")
+    if action_id != "socialize" and any(p.get("tag") == "Social" for p in percepts):
+        alternatives.append("yakındaki biriyle konuşabilirdim")
+    if action_id != "work" and sched["act"] == "work" and v["en"] > 0.4:
+        alternatives.append("çalışmaya devam edebilirdim")
+
+    if alternatives:
+        alt = random.choice(alternatives)
+        sentences.append(
+            f"Elbette {alt}, ancak içinde bulunduğum durum bunu şu an için doğru seçim yapmıyor."
+        )
+    else:
+        sentences.append("Başka bir seçenek düşündüm ama mevcut koşullar beni bu karardan alıkoyuyor.")
+
+    # ── S3: Trait / emotion influence ────────────────────────────────────────
+    trait_sentences = {
+        "Brave":     f"Cesaretim beni öne atılmaya itiyor ({emo['fear']:.2f} korku hissetsem de).",
+        "Cunning":   "Kurnaz biri olarak her adımı hesaplıyorum, anlık karar vermek hata olur.",
+        "Cautious":  f"Temkinli yapım beni acele kararlardan alıkoyuyor, ihtiyatlı olmak şart.",
+        "Anxious":   f"İçim sıkışıyor, korku ({emo['fear']:.2f}) her şeyi daha ağır hissettiriyor.",
+        "Honorable": "Onurumu lekelemeden doğru olanı yapmak zorundayım.",
+        "Aggressive":f"Öfkem ({emo['ang']:.2f}) beni harekete geçiriyor, duraksamamalıyım.",
+        "Devout":    "İnancım bana yol gösteriyor; tanrının isteği her şeyin önünde.",
+        "Greedy":    "Çıkarlarımı düşünüyorum; bu hamle uzun vadede bana kazandırır.",
+        "Wrathful":  f"Sinirlerim gerildi ({emo['ang']:.2f}), sabırsızlanıyorum.",
+        "Loyal":     "Sadakatim beni doğru adımı atmaya zorluyor.",
+    }
+    found_sentence = None
+    for t in traits:
+        if t in trait_sentences:
+            found_sentence = trait_sentences[t]
+            break
+    if not found_sentence:
+        mood = emo.get("mood", "Calm")
+        found_sentence = f"Şu anki ruh halim ({mood}) bu kararımı şekillendiriyor."
+    sentences.append(found_sentence)
+
+    # ── S4: Final decision rationale ─────────────────────────────────────────
+    action_rationale = {
+        "eat":       "Sonuç olarak yemek yemek en acil ihtiyacım, önce bunu karşılamalıyım.",
+        "drink":     "Sonuç olarak su içmek en acil ihtiyacım, önce bunu karşılamalıyım.",
+        "sleep":     "Bu yüzden dinlenmeden başka seçeneğim yok; yorgun bir zihin doğru karar veremez.",
+        "flee":      "Bu yüzden geri çekilmek ve güvenli bir yer bulmak en mantıklı hamle.",
+        "gather":    "Bu yüzden kaynakları toplamak ve ihtiyaçlarımı karşılamak önceliğim.",
+        "heal":      "Bu yüzden önce kendimi iyileştirip güçlenmem, sonra diğer her şeyi düşünebilirim.",
+        "attack":    "Bu yüzden tehdidi bertaraf etmek için harekete geçmem gerekiyor.",
+        "socialize": "Bu yüzden bu anı değerlendirip bağ kurmak istiyorum; insan teması da bir ihtiyaç.",
+        "trade":     "Bu yüzden bir alışveriş yapmak şu an için en kazançlı adım.",
+        "work":      "Bu yüzden işime devam ediyorum; sorumluluklarımı ihmal edemem.",
+        "pray":      "Bu yüzden dua ederek içimi ferahlatmak ve kafamı toparlamak istiyorum.",
+        "walk_to":   "Bu yüzden etrafı keşfedip durumu değerlendirmeye karar verdim.",
+    }
+    sentences.append(action_rationale.get(action_id, "Bu yüzden en uygun kararı veriyorum."))
+
+    # ── S5: Memory influence (optional) ──────────────────────────────────────
+    strong_mems = [m for m in memories if abs(m.get("ew", 0)) > 0.6]
+    if strong_mems:
+        mem = random.choice(strong_mems)
+        if mem["ew"] < 0:
+            sentences.append(
+                f"Daha önce yaşadıklarım ({mem['desc'][:40]}...) bana bu tür durumlarda "
+                f"dikkatsiz davranmanın bedelini öğretti."
+            )
+        else:
+            sentences.append(
+                f"Geçmişteki deneyimlerim ({mem['desc'][:40]}...) bana bu yolun doğru "
+                f"olduğunu hatırlatıyor."
+            )
+
+    return " ".join(sentences)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Intent deviation selector (~15% of examples)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -364,16 +525,17 @@ def _select_action_with_deviation(state: dict) -> tuple[str, str, str | None, st
     or None if no deviation case applies for this state.
 
     Four deviation cases:
-      D1 – hun>0.65 + social percept → socialize (eating deferred)
-      D2 – en<0.35 + non-threat nearby percept → walk_to (curiosity)
-      D3 – work conditions met + low mood/anger → pray or socialize instead
-      D4 – gather condition met + social percept → stay in conversation
+      D1 – hun>0.65 + social percept -> socialize (eating deferred)
+      D2 – en<0.35 + non-threat nearby percept -> walk_to (curiosity)
+      D3 – work conditions met + low mood/anger -> pray or socialize instead
+      D4 – gather condition met + social percept -> stay in conversation
     """
     v        = state["vitals"]
     emo      = state["emo"]
     percepts = state["percepts"]
     inv_ids  = [i["id"] for i in state["inv"]]
     role     = state["occ"]
+    arch     = state["arch"]
 
     social_p  = next((p for p in percepts if p.get("tag") == "Social"), None)
     non_threat = next((p for p in percepts if p.get("tag") != "Threat"), None)
@@ -381,7 +543,7 @@ def _select_action_with_deviation(state: dict) -> tuple[str, str, str | None, st
 
     cases = []
 
-    # D1: Hungry but social is active → consciously defer eating
+    # D1: Hungry but social is active -> consciously defer eating
     if v["hun"] > 0.65 and social_p:
         cases.append((
             "socialize",
@@ -391,7 +553,7 @@ def _select_action_with_deviation(state: dict) -> tuple[str, str, str | None, st
             "Happy",
         ))
 
-    # D2: Tired but something interesting nearby → curiosity wins
+    # D2: Tired but something interesting nearby -> curiosity wins
     if v["en"] < 0.35 and non_threat and non_threat.get("tag") != "Threat":
         cases.append((
             "walk_to",
@@ -401,7 +563,7 @@ def _select_action_with_deviation(state: dict) -> tuple[str, str, str | None, st
             "Calm",
         ))
 
-    # D3: Should be working (schedule says work, energy ok) but mood is low → pray/socialize
+    # D3: Should be working (schedule says work, energy ok) but mood is low -> pray/socialize
     if sched_act == "work" and v["en"] > 0.4 and (emo["hap"] < 0.15 or emo["ang"] > 0.55):
         alt = "pray" if ("Devout" in state["traits"] or role == "Priest") else "socialize"
         if alt == "pray":
@@ -420,7 +582,7 @@ def _select_action_with_deviation(state: dict) -> tuple[str, str, str | None, st
                 "Calm",
             ))
 
-    # D4: Gather conditions met but mid-conversation → stay and talk
+    # D4: Gather conditions met but mid-conversation -> stay and talk
     if (v["hun"] > 0.3 or v["thi"] > 0.3) and "food" not in inv_ids and social_p:
         cases.append((
             "socialize",
@@ -428,6 +590,56 @@ def _select_action_with_deviation(state: dict) -> tuple[str, str, str | None, st
             f"Önce bunu bitireyim, sonra gidip toplarım.",
             random.choice(["Devam edelim...", "Biraz daha var."]),
             "Calm",
+        ))
+
+    # D5: Dual crisis -- hp critical AND hunger high -> heal wins with explicit CoT
+    if v["hp"] < 30 and v["hun"] > 0.70 and "medicine" in inv_ids:
+        cases.append((
+            "heal",
+            f"Canım kritik ({v['hp']:.1f}) ve hem de aç ({v['hun']:.2f}). "
+            f"İkisi de acil ama bir ölü yemek yiyemez; önce kendimi iyileştirmeliyim, "
+            f"sonra yiyecek düşünürüm.",
+            None,
+            "Fearful",
+        ))
+
+    # D6: Brave archetype registering elevated fear -> conflicted courage
+    # Brave b5.n = 0.2, so fear is bounded ~0.0-0.2; threshold 0.12 captures ~top 40% of Brave fear
+    if arch == "Brave" and emo["fear"] > 0.12:
+        threats = [p for p in percepts if p.get("tag") == "Threat"]
+        if threats:
+            top = max(threats, key=lambda p: p["threat"])
+            cases.append((
+                "attack",
+                f"Korkuyorum, bunu inkâr etmeyeceğim ({emo['fear']:.2f}). "
+                f"Ama cesaretim benim doğamda; {top['id']}'dan kaçmak kim olduğuma ihanet olur. "
+                f"Gözlerimi yumup ilerliyorum.",
+                None,
+                "Brave",
+            ))
+
+    # D7: Schedule says work but energy is critically low -> body overrides duty
+    if sched_act == "work" and v["en"] < 0.30:
+        cases.append((
+            "sleep",
+            f"Çalışma saatim, görevlerim bekliyor. Ama bedenim artık dayanamıyor "
+            f"(enerji: {v['en']:.2f}). Yorulmuş bir zihinle iyi iş çıkaramam; "
+            f"kısa bir uyku her şeyi düzeltirecek.",
+            None,
+            "Tired",
+        ))
+
+    # D8: Strong negative memory tied to a percept entity -> trauma drives flee
+    strong_neg_mems = [m for m in state["memories"] if m.get("ew", 0) < -0.7]
+    if strong_neg_mems and percepts:
+        mem = random.choice(strong_neg_mems)
+        cases.append((
+            "flee",
+            f"Geçmişim bu durumu tanıdık kılıyor ve bu iyi bir şey değil. "
+            f"'{mem['desc'][:50]}...' -- o an aklımdan geçiyor. "
+            f"Zor yoldan öğrendiklerin en değerli derslerdir; burayı terk ediyorum.",
+            None,
+            "Fearful",
         ))
 
     if not cases:
@@ -448,7 +660,7 @@ SYSTEM_PROMPT = (
     "- reasoning: birinci şahıs iç monolog, 1-3 cümle\n"
     "- dialogue: yalnızca socialize/trade eylemlerinde doldur, diğerlerinde null\n"
     "- emotion: NPC'nin şu anki baskın duygu durumu (tek kelime)\n"
-    "- Yanıtın SADECE JSON olsun — kod bloğu, açıklama yok"
+    "- Yanıtın SADECE JSON olsun -- kod bloğu, açıklama yok"
 )
 
 TEMPLATE = ("<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n"
@@ -456,10 +668,35 @@ TEMPLATE = ("<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n"
             "{user}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
             "{assistant}<|eot_id|>")
 
-_DEVIATION_RATE = 0.15   # 15% of examples use intent deviation
+_DEVIATION_RATE  = 0.15   # 15% of examples use intent deviation
+_PARAPHRASE_RATE = 0.175  # 17.5% of formatter examples are paraphrased (target 15-20%)
+
+
+SYSTEM_PROMPT_REASONER = (
+    "Sen bir ortaçağ simülasyonundaki NPC'nin iç ses motorusun.\n"
+    "Sana NPC'nin anlık durumunu JSON olarak göndereceğim.\n"
+    "Görevin: NPC'nin ne yapması gerektiğini ve NEDEN yapması gerektiğini\n"
+    "3-5 cümlelik Türkçe iç monolog olarak yaz.\n"
+    "ASLA JSON üretme. ASLA action_id adı kullanma. Sadece düşün.\n"
+    "Kişilik özellikleri, hayatta kalma ihtiyaçları, tehdit algısı,\n"
+    "duygusal durum, hafıza ve sosyal bağlamı değerlendir."
+)
+
+SYSTEM_PROMPT_FORMATTER = (
+    "Sen bir NPC simülasyonu için JSON dönüştürücüsün.\n"
+    "Sana bir NPC'nin ne yapmak istediğini Türkçe olarak anlatacağım.\n"
+    "Bunu aşağıdaki JSON şemasına dönüştür:\n"
+    '{"npc_id":"<string>","reasoning":"<girdiyi kopyala>",'
+    '"selected_action":{"action_id":"<listeden>","target_id":null,"dialogue":null},'
+    '"emotion":"<tek kelime>"}\n'
+    'valid_actions: ["eat","drink","sleep","flee","gather","heal",'
+    '"attack","socialize","trade","work","pray","walk_to"]\n'
+    "SADECE JSON yaz. Kod bloğu veya açıklama ekleme."
+)
 
 
 def build_example() -> dict:
+    """Build one Reasoner training example (NPC state -> CoT reasoning)."""
     state = generate_npc_state()
 
     # Choose path: deviation (~15%) or standard (~85%)
@@ -472,8 +709,11 @@ def build_example() -> dict:
 
     assert action_id in NPC_SIM_ACTIONS, f"Invalid action: {action_id}"
 
-    user_payload = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
-    output = {
+    # Expand to full CoT reasoning (3-5 sentences)
+    cot = generate_cot_reasoning(state, action_id, reasoning)
+
+    user_payload    = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+    structured_out  = {
         "npc_id": state["id"],
         "reasoning": reasoning,
         "selected_action": {
@@ -483,31 +723,138 @@ def build_example() -> dict:
         },
         "emotion": emotion,
     }
-    assistant_json = json.dumps(output, ensure_ascii=False, separators=(",", ":"))
+    assistant_json = json.dumps(structured_out, ensure_ascii=False, separators=(",", ":"))
 
-    text = TEMPLATE.format(
-        system=SYSTEM_PROMPT,
+    # Reasoner training text: user=state JSON, assistant=cot reasoning
+    reasoner_text = TEMPLATE.format(
+        system=SYSTEM_PROMPT_REASONER,
         user=user_payload,
-        assistant=assistant_json,
+        assistant=cot,
     )
-    return {"text": text}
+    return {
+        "text":           reasoner_text,
+        "_cot":           cot,           # used by formatter dataset builder
+        "_action_id":     action_id,
+        "_emotion":       emotion,
+        "_dialogue":      dialogue,
+        "_npc_id":        state["id"],
+        "_assistant_json": assistant_json,
+    }
+
+
+def build_formatter_example(example: dict, augment: bool = False) -> dict:
+    """Derive one Formatter training example from a Reasoner example.
+
+    user    = cot_reasoning (optionally paraphrased)
+    assistant = the structured JSON output
+    """
+    cot_text = example["_cot"]
+    if augment:
+        cot_text = _paraphrase(cot_text)
+
+    formatter_text = TEMPLATE.format(
+        system=SYSTEM_PROMPT_FORMATTER,
+        user=cot_text,
+        assistant=example["_assistant_json"],
+    )
+    return {"text": formatter_text}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate_dataset(path: str, count: int, seed: int = 42) -> None:
+def generate_dataset(path: str, count: int, seed: int = 42) -> list[dict]:
+    """Generate Reasoner training dataset. Returns the raw example list for reuse."""
     random.seed(seed)
-    print(f"Generating {count} examples → {path}")
+    print(f"Generating {count} reasoner examples -> {path}")
+    samples: list[dict] = []
+    while len(samples) < count:
+        example = build_example()
+        samples.append(example)
+
+        # ── Oversampling rules ────────────────────────────────────────────────
+        # Parse state from the embedded text to determine oversampling eligibility
+        try:
+            parts = example["text"].split("<|start_header_id|>user<|end_header_id|>")
+            if len(parts) >= 2:
+                user_block = parts[1].split("<|eot_id|>")[0].strip()
+                state = json.loads(user_block)
+                arch     = state.get("arch", "")
+                percepts = state.get("percepts", [])
+                traits   = state.get("traits", [])
+
+                # 1. Brave x high-threat -> attack (existing, 3x)
+                is_brave_threat = (
+                    arch == "Brave"
+                    and any(p.get("threat", 0) >= 0.7 for p in percepts)
+                )
+                if is_brave_threat:
+                    for _ in range(2):  # add 2 copies -> 3x total
+                        if len(samples) < count:
+                            samples.append(example)
+
+                # 2. Fearful x social percept -> social-anxiety case (new, 2x)
+                is_fearful_social = (
+                    arch == "Fearful"
+                    and any(p.get("tag") == "Social" for p in percepts)
+                )
+                if is_fearful_social and len(samples) < count:
+                    samples.append(example)
+
+                # 3. Honorable x attack-eligible trigger -> moral conflict (new, 2x)
+                is_honorable_attack = (
+                    "Honorable" in traits
+                    and any(p.get("tag") == "Threat" for p in percepts)
+                    and example["_action_id"] == "attack"
+                )
+                if is_honorable_attack and len(samples) < count:
+                    samples.append(example)
+
+        except Exception:
+            pass  # Non-critical: skip oversampling if parsing fails
+
+    # Write exactly count samples (strip private _ fields)
     with open(path, "w", encoding="utf-8") as f:
-        for i in range(count):
-            example = build_example()
-            json.dump(example, f, ensure_ascii=False)
+        for i, example in enumerate(samples[:count]):
+            out = {"text": example["text"]}
+            json.dump(out, f, ensure_ascii=False)
             f.write("\n")
             if (i + 1) % 2000 == 0:
                 print(f"  {i + 1}/{count}...")
-    print(f"  Done → {os.path.getsize(path) // 1024} KB")
+    print(f"  Done -> {os.path.getsize(path) // 1024} KB")
+    return samples[:count]
+
+
+def generate_formatter_dataset(
+    path: str,
+    reasoner_examples: list[dict],
+    augment_rate: float = _PARAPHRASE_RATE,
+) -> None:
+    """Derive Formatter training corpus from Reasoner examples.
+
+    For each Reasoner example:
+      - Always emit 1 clean (unaugmented) formatter example.
+      - With probability `augment_rate`, also emit 1 paraphrased variant.
+
+    This yields ~15-20% augmented examples in the final corpus, teaching
+    Component B to tolerate imperfect Reasoner output phrasing.
+    """
+    print(f"Generating formatter corpus -> {path}")
+    fmt_samples: list[dict] = []
+    for ex in reasoner_examples:
+        fmt_samples.append(build_formatter_example(ex, augment=False))
+        if random.random() < augment_rate:
+            fmt_samples.append(build_formatter_example(ex, augment=True))
+
+    random.shuffle(fmt_samples)
+    with open(path, "w", encoding="utf-8") as f:
+        for i, ex in enumerate(fmt_samples):
+            json.dump(ex, f, ensure_ascii=False)
+            f.write("\n")
+            if (i + 1) % 2000 == 0:
+                print(f"  {i + 1}/{len(fmt_samples)}...")
+    print(f"  Done -> {os.path.getsize(path) // 1024} KB  ({len(fmt_samples)} examples)")
 
 
 if __name__ == "__main__":
@@ -515,6 +862,24 @@ if __name__ == "__main__":
     data_dir = os.path.join(base, "..", "data")
     os.makedirs(data_dir, exist_ok=True)
 
-    generate_dataset(os.path.join(data_dir, "train_v2.jsonl"), count=10000, seed=456234)
-    generate_dataset(os.path.join(data_dir, "test_v2.jsonl"),  count=2000,  seed=984756)
-    print("\nAll done. v3 datasets ready (drink action + intent deviation + schedule field)!")
+    # ── Reasoner corpus ───────────────────────────────────────────────────────
+    train_examples = generate_dataset(
+        os.path.join(data_dir, "train_reasoner.jsonl"), count=10000, seed=456234
+    )
+    _test_examples = generate_dataset(
+        os.path.join(data_dir, "test_reasoner.jsonl"),  count=2000,  seed=984756
+    )
+
+    # ── Formatter corpus (derived from train split only) ──────────────────────
+    generate_formatter_dataset(
+        os.path.join(data_dir, "train_formatter.jsonl"),
+        reasoner_examples=train_examples,
+        augment_rate=_PARAPHRASE_RATE,
+    )
+
+    print(
+        "\nAll done. v4 datasets ready:\n"
+        "  train_reasoner.jsonl  -- 20k CoT examples for Component A (Llama 3.2 3B)\n"
+        "  test_reasoner.jsonl   -- 2k  evaluation set\n"
+        "  train_formatter.jsonl -- ~23-24k (cot -> JSON) pairs for Component B (Llama 3.2 1B)\n"
+    )

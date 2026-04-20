@@ -162,9 +162,23 @@ class FleeAction(IAction):
         threat = ctx.get_top_percept("Threat")
         if not threat:
             return 0.0
-        fear = ctx.self_npc.psychology.fear
+        fear        = ctx.self_npc.psychology.fear
         neuroticism = ctx.self_npc.psychology.neuroticism
-        return max(0.0, min((threat.threat_level * 0.5 + fear * 0.3 + neuroticism * 0.2), 1.0))
+        base = threat.threat_level * 0.5 + fear * 0.3 + neuroticism * 0.2
+
+        # Memory bias: negative past experiences with this threat → more likely to flee
+        mem_bias = ctx.get_memory_threat_bias(threat.object_id)
+        # mem_bias < 0 means "this hurt me before" → raise flee score
+        base += (-mem_bias) * 0.15
+
+        # Brave NPCs strongly suppress the urge to flee unless fear is already high
+        if ctx.self_npc.traits.has("Brave") and fear < 0.5:
+            base *= 0.4   # strong suppression — Brave stands ground
+        # Cowards amplify flee score
+        if ctx.self_npc.traits.has("Coward"):
+            base = min(1.0, base * 1.5)
+
+        return max(0.0, min(base, 1.0))
 
     def execute(self, ctx: ActionContext) -> None:
         threat = ctx.get_top_percept("Threat")
@@ -175,6 +189,10 @@ class FleeAction(IAction):
         new_pos = ctx.self_npc.position + direction * speed * ctx.delta_time
         ctx.world.move_npc(ctx.self_npc.identity.npc_id, new_pos)
         ctx.self_npc.vitals.consume_energy(2.0 * ctx.delta_time)
+        # Fleeing raises fear and stress
+        npc = ctx.self_npc
+        npc.psychology.set_fear(min(1.0, npc.psychology.fear + 0.15))
+        npc.vitals.set_stress(min(1.0, npc.vitals.stress + 0.05))
         ctx.world.publish_event(SimEvent(
             self.action_type, ctx.self_npc.identity.npc_id, threat.object_id,
             f"{ctx.self_npc.identity.display_name} flees from {threat.object_id}.",
@@ -291,14 +309,32 @@ class AttackAction(IAction):
             return False
         if ctx.self_npc.traits.has("Pacifist"):
             return False
-        return ctx.self_npc.traits.has("Aggressive") or ctx.self_npc.psychology.anger > 0.65
+        # Aggressive trait or high anger: always eligible
+        if ctx.self_npc.traits.has("Aggressive") or ctx.self_npc.psychology.anger > 0.65:
+            return True
+        # Brave trait: eligible for self-defence even without anger
+        if ctx.self_npc.traits.has("Brave"):
+            return True
+        # Any NPC can retaliate if they took significant damage
+        recent_damage = ctx.self_npc.vitals.max_health * 0.15
+        if ctx.self_npc.vitals.health < ctx.self_npc.vitals.max_health - recent_damage:
+            return True
+        return False
 
     def evaluate(self, ctx: ActionContext) -> float:
-        anger = ctx.self_npc.psychology.anger
-        bravery = 1.0 - ctx.self_npc.psychology.neuroticism
+        anger     = ctx.self_npc.psychology.anger
+        bravery   = 1.0 - ctx.self_npc.psychology.neuroticism
         trait_mod = ctx.self_npc.traits.get_weight_modifier(self.action_type)
         goal_boost = 1.3 if ctx.has_goal(GoalType.ATTACK) else 1.0
-        raw = ((anger + bravery) / 2.0) * trait_mod * goal_boost
+
+        # Brave NPCs get a courage boost proportional to threat level
+        brave_boost = 0.0
+        if ctx.self_npc.traits.has("Brave"):
+            threat = ctx.get_top_percept("Threat")
+            if threat:
+                brave_boost = threat.threat_level * 0.4
+
+        raw = ((anger * 0.4 + bravery * 0.6) + brave_boost) * trait_mod * goal_boost
         return max(0.0, min(raw, 1.0))
 
     def execute(self, ctx: ActionContext) -> None:
@@ -306,8 +342,13 @@ class AttackAction(IAction):
         if not threat:
             return
         npc = ctx.self_npc
-        npc.vitals.set_stress(min(1.0, npc.vitals.stress + 0.1))
-        npc.psychology.set_anger(max(0.0, npc.psychology.anger - 0.2))
+        # Combat raises stress; anger peaks during combat and only cools post-combat
+        npc.vitals.set_stress(min(1.0, npc.vitals.stress + 0.12))
+        threat_present = ctx.has_percept("Threat")
+        if not threat_present:
+            npc.psychology.set_anger(max(0.0, npc.psychology.anger - 0.15))
+        else:
+            npc.psychology.set_anger(min(1.0, npc.psychology.anger + 0.05))
 
         melee_dist = 3.0
         sq_dist = SimVector3.sqr_distance(npc.position, threat.last_known_position)
@@ -368,6 +409,15 @@ class SocializeAction(IAction):
             if salient:
                 target.witness_event(salient.event,
                                      [ctx.self_npc.identity.npc_id], ctx.current_time)
+        # Socialising raises happiness proportional to extraversion
+        e = ctx.self_npc.psychology.extraversion
+        ctx.self_npc.psychology.set_happiness(
+            min(1.0, ctx.self_npc.psychology.happiness + 0.05 * (0.5 + e))
+        )
+        # Social contact relieves stress
+        ctx.self_npc.vitals.set_stress(
+            max(0.0, ctx.self_npc.vitals.stress - 0.08)
+        )
         ctx.world.publish_event(SimEvent(
             self.action_type, ctx.self_npc.identity.npc_id,
             ally.object_id if ally else None,
@@ -432,14 +482,22 @@ class WorkAction(IAction):
                           interrupt_allowed=True)
 
     def is_valid(self, ctx: ActionContext) -> bool:
-        if ctx.self_npc.vitals.energy_norm <= 0.05:
+        v = ctx.self_npc.vitals
+        # Too exhausted to work — need rest first
+        if v.energy_norm <= 0.20:
+            return False
+        # Survival needs override work
+        if v.hunger > 0.80 or v.thirst > 0.80:
             return False
         return True
 
     def evaluate(self, ctx: ActionContext) -> float:
-        sched = ctx.self_npc.schedule.preference_at("work", ctx.sim_day_hour)
-        consc = ctx.self_npc.psychology.conscientiousness
-        return sched * 0.6 + consc * 0.4
+        sched  = ctx.self_npc.schedule.preference_at("work", ctx.sim_day_hour)
+        consc  = ctx.self_npc.psychology.conscientiousness
+        energy = ctx.self_npc.vitals.energy_norm
+        # Energy penalty: score halves below 50%, hits near-zero by 25%
+        energy_factor = max(0.0, (energy - 0.20) / 0.80)
+        return sched * 0.5 * energy_factor + consc * 0.3 * energy_factor
 
     def execute(self, ctx: ActionContext) -> None:
         npc = ctx.self_npc
@@ -485,8 +543,10 @@ class PrayAction(IAction):
 
     def evaluate(self, ctx: ActionContext) -> float:
         stress = ctx.self_npc.vitals.stress
-        devout = 0.3 if ctx.self_npc.traits.has("Devout") else 0.0
-        return min(1.0, stress * 0.5 + devout)
+        devout_bonus = 0.4 if ctx.self_npc.traits.has("Devout") else 0.0
+        # Stress-driven prayer: rises steeply above 0.3
+        stress_drive = max(0.0, (stress - 0.3) / 0.7) * 0.6
+        return min(1.0, stress_drive + devout_bonus)
 
     def execute(self, ctx: ActionContext) -> None:
         npc = ctx.self_npc
@@ -559,7 +619,12 @@ class WalkToAction(IAction):
             return 0.0  # Already there
             
         if v.hunger > 0.65 and not inv.has(ItemIds.FOOD):
-            return min(1.0, v.hunger * 0.85)
+            target = WorldMap.get_zone("Market")
+            if target:
+                dist = SimVector3.distance(ctx.self_npc.position, target)
+                if dist > 2.0:
+                    return min(1.0, v.hunger * 0.92)  # beats GatherAction's 0.85
+            return min(1.0, v.hunger * 0.85)  # already at market, gather here
         if v.thirst > 0.65 and not inv.has(ItemIds.WATER):
             return min(1.0, v.thirst * 0.85)
             

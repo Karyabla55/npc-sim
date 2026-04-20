@@ -68,6 +68,24 @@ class ActionContext:
         lst = self.goals.get_by_type(goal_type)
         return lst[0] if lst else None
 
+    # ── Memory helpers ──
+
+    def get_memory_threat_bias(self, subject_id: str) -> float:
+        """
+        Returns a [-1, +1] bias from past experiences with this subject.
+        Positive = NPC has successfully dealt with this type of threat before (confidence).
+        Negative = NPC was hurt by it before (extra fear / flee tendency).
+        Returns 0.0 if no relevant memories exist.
+        """
+        try:
+            relevant = self.self_npc.memory.get_related_to(subject_id)
+        except Exception:
+            return 0.0
+        if not relevant:
+            return 0.0
+        total_ew = sum(m.emotional_weight for m in relevant)
+        return max(-1.0, min(total_ew / max(1, len(relevant)), 1.0))
+
     def __repr__(self) -> str:
         return (f"[ActionContext] {self.self_npc.identity.display_name} "
                 f"percepts:{len(self.active_percepts)} hour:{self.sim_day_hour:.1f}h")

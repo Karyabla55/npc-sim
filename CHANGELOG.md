@@ -5,6 +5,35 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.0.3] – 2026-03-26
+
+### Fixed
+
+- **`llm/llm_backend.py` — `OllamaBackend.call()`**: Added `stop` tokens (`<|eot_id|>`, `<|end_of_text|>`, `<|eot`) to the Ollama request body to prevent corrupt EOS artifacts (`espoň` / `espon`) from appearing in model output.
+- **`llm/llm_backend.py` — `OllamaBackend._parse()`**: Added pre-parse sanitisation that strips any EOS token artifacts (`<|eot_id|>`, `espo`, etc.) from model output before calling `json.loads()`.
+- **`llm/llm_backend.py` — `ILLMBackend.SYSTEM_PROMPT`**: Replaced Turkish prompt with English version that includes a strict **decision priority ladder** (interrupt + trait → attack/flee, hunger/thirst/HP rules) and explicit **trait behaviour rules** (Brave→no-flee, Fearful→flee, Devout→pray, Greedy→trade). Reduces Brave-NPC hallucination from dataset imbalance.
+- **`llm/llm_decision_system.py` — `_enforce_trait_coherence()`**: New post-inference guard (H5) — overrides `flee` → `attack` when NPC has `Brave` trait, `fear < 0.4`, and `threat_level ≥ 0.7`; overrides `attack` → `flee` when NPC has `Pacifist` trait. Applied in `_apply_pending()` before action lookup.
+- **`llm/llm_decision_system.py` — `_check_interrupt()`**: Added fear spike on high-threat interrupt — `fear += threat_level × 0.3 × (0.5 + neuroticism × 0.5)` — so the NPC's emotional state reacts visibly when the LLM brain activates.
+- **`decisions/decision_system.py` — `tick()`**: Added identical fear spike for the pure utility-AI path so both paths produce consistent emotional reactions to threats.
+- **`decisions/actions/builtin.py` — `AttackAction.is_valid()`**: Extended eligibility: `Brave` trait alone now qualifies an NPC for self-defence (no longer requires `Aggressive` or `anger > 0.65`); any NPC with `health < max_health × 0.85` can retaliate.
+- **`decisions/actions/builtin.py` — `AttackAction.evaluate()`**: Brave NPCs gain `brave_boost = threat_level × 0.4` added to the raw score, ensuring `attack` beats `flee` after Brave modifier is applied.
+- **`decisions/actions/builtin.py` — `AttackAction.execute()`**: Reversed anger direction — anger now rises (`+0.05`) while a threat is present and only decays (`-0.15`) post-combat. Stress change raised from `+0.1` to `+0.12`.
+- **`decisions/actions/builtin.py` — `FleeAction.evaluate()`**: Added trait-aware suppressors — Brave NPCs with `fear < 0.5` multiply base score by `0.4`; Coward NPCs multiply by `1.5`. Incorporates `get_memory_threat_bias()` from `ActionContext` for experience-sensitive flee decisions (Bug 2.7).
+- **`decisions/actions/builtin.py` — `FleeAction.execute()`**: Added emotion side-effects — `fear += 0.15`, `stress += 0.05` each time the NPC flees; NPCs now become visibly scared when fleeing.
+- **`decisions/actions/builtin.py` — `SocializeAction.execute()`**: Added happiness gain `+0.05 × (0.5 + extraversion)` and stress reduction `-0.08` per socialise action.
+- **`decisions/actions/builtin.py` — `WorkAction.is_valid()`**: Raised energy floor from `0.05` to `0.20`; additionally returns `False` when `hunger > 0.80` or `thirst > 0.80` so survival needs block work.
+- **`decisions/actions/builtin.py` — `WorkAction.evaluate()`**: Added `energy_factor = (energy - 0.20) / 0.80` multiplier — work score fades toward 0 as energy approaches the 0.20 floor, letting `SleepAction` win naturally.
+- **`decisions/actions/builtin.py` — `PrayAction.evaluate()`**: Steepened stress-driven curve to `max(0, (stress - 0.3) / 0.7) × 0.6`; Devout bonus raised from `0.3` to `0.4`. Non-Devout NPCs now choose prayer when highly stressed.
+- **`decisions/actions/builtin.py` — `WalkToAction.evaluate()`**: When NPC is hungry and the Market is more than `2.0` away, score is `hunger × 0.92` (was `× 0.85`), ensuring `WalkToAction` beats `GatherAction` until the NPC reaches the resource zone.
+- **`decisions/action_context.py` — `get_memory_threat_bias()`**: New helper returns `[-1, +1]` average emotional weight of all episodic memories related to a given entity ID. Negative bias → NPC was hurt before → flee score rises. Used by `FleeAction.evaluate()`.
+- **`Stateful_NPC/generator/npc_sim_generator_v2.py` — `generate_dataset()`**: Oversamples `Brave` arch + `threat ≥ 0.7` examples by 3×, correcting the `35% × 20% = 7%` occurrence rate that caused the model to underfit the brave-guard-attacks-threat decision rule.
+
+### Changed
+
+- **`llm/llm_decision_system.py`**: Updated module docstring to document H5 (trait coherence guard) alongside H1–H4.
+
+---
+
 ## [1.0.2] – 2026-03-22
 
 ### Added

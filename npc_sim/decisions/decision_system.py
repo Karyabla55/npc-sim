@@ -34,6 +34,14 @@ class DecisionSystem:
         threat_level = highest_threat.threat_level if highest_threat else 0.0
         hard_interrupt = vitals.hunger > 0.85 or vitals.thirst > 0.85 or threat_level >= 0.8
 
+        # Fear spike when NPC first perceives a significant threat
+        if highest_threat and threat_level >= 0.8:
+            n = ctx.self_npc.psychology.neuroticism
+            spike = threat_level * 0.3 * (0.5 + n * 0.5)
+            ctx.self_npc.psychology.set_fear(
+                min(1.0, ctx.self_npc.psychology.fear + spike)
+            )
+
         if self._active_lock:
             self._lock_elapsed += ctx.delta_time
 

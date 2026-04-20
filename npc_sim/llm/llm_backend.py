@@ -50,16 +50,30 @@ class ILLMBackend(ABC):
     """Contract for all LLM backends."""
 
     SYSTEM_PROMPT = (
-        "Sen bir medeniyet simülasyonundaki NPC'nin bilişsel karar motorusun.\n"
-        "Sana NPC'nin anlık durumunu JSON formatında göndereceğim.\n"
-        "Görevin: Yalnızca tek bir eylem kararı üret, JSON formatında döndür.\n"
-        "Kurallar:\n"
-        "- action_id MUTLAKA valid_actions listesindeki değerlerden biri olmalıdır\n"
-        "- reasoning: birinci şahıs iç monolog, 1-3 cümle\n"
-        "- dialogue: yalnızca socialize/trade eylemlerinde doldur, diğerlerinde null\n"
-        "- emotion: NPC'nin şu anki baskın duygu durumu (tek kelime)\n"
-        "- Yanıtın SADECE JSON olsun — kod bloğu, açıklama yok\n"
-        "Beklenen format:\n"
+        "You are the cognitive decision engine of an NPC in a civilisation simulation.\n"
+        "I will send you the NPC's current state as JSON.\n"
+        "Your task: produce exactly one action decision, returned as JSON.\n\n"
+        "Rules:\n"
+        "- action_id MUST be one of the values in valid_actions\n"
+        "- reasoning: first-person inner monologue, 1-3 sentences\n"
+        "- dialogue: fill only for socialize/trade actions, otherwise null\n"
+        "- emotion: NPC's dominant emotional state right now (single word)\n"
+        "- Return ONLY JSON — no code blocks, no explanation\n\n"
+        "Decision priority (apply in strict order):\n"
+        "1. If interrupt=true and a Threat percept exists:\n"
+        "     - Brave / Aggressive trait AND fear < 0.5 → action_id = 'attack'\n"
+        "     - Otherwise → action_id = 'flee'\n"
+        "2. If hun > 0.75 AND food is in inventory → action_id = 'eat'\n"
+        "3. If thi > 0.75 AND water is in inventory → action_id = 'drink'\n"
+        "4. If hp < 30 AND medicine is in inventory → action_id = 'heal'\n"
+        "5. All other cases: reason from context, personality (b5), and memories.\n\n"
+        "Trait behaviour rules:\n"
+        "- Brave / Loyal: will not flee from threats unless fear > 0.6 or hp < 20\n"
+        "- Fearful / Anxious / Cautious: prefer flee or walk_to over attack\n"
+        "- Aggressive: attack score is elevated; may attack even without interrupt\n"
+        "- Devout: pray when stressed; prioritises Temple zone\n"
+        "- Greedy: trade score is elevated; hoards food/gold\n\n"
+        "Expected output format:\n"
         '{"npc_id":"...","reasoning":"...","selected_action":{"action_id":"...",'
         '"target_id":null,"dialogue":null},"emotion":"..."}'
     )
@@ -116,6 +130,9 @@ class OllamaBackend(ILLMBackend):
             ],
             "stream": False,
             "format": "json",
+            "options": {
+                "stop": ["<|eot_id|>", "<|end_of_text|>", "<|eot"]
+            },
         }, ensure_ascii=False).encode("utf-8")
 
         req = urllib.request.Request(
@@ -138,6 +155,13 @@ class OllamaBackend(ILLMBackend):
     def _parse(self, npc_id: str, content: str, raw: str,
                latency: float) -> LLMResponse:
         """Parse model output JSON → LLMResponse. Raises ValueError on schema error."""
+        # Strip any EOS token artifacts that leaked past Ollama's stop list
+        for stop_artifact in ["<|eot_id|>", "<|end_of_text|>", "<|eot", "espo"]:
+            idx = content.find(stop_artifact)
+            if idx != -1:
+                content = content[:idx]
+        content = content.strip()
+
         data = json.loads(content)
         sa = data.get("selected_action", {})
         action_id = sa.get("action_id") or data.get("action_id") or ""

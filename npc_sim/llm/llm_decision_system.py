@@ -2,11 +2,12 @@
 # Licensed under the Apache License, Version 2.0
 """LLMDecisionSystem: drop-in replacement for DecisionSystem using a local LLM.
 
-Implements all 4 hardening mechanisms:
+Implements all 5 hardening mechanisms:
   H1 - Semantic spatial context via WorldRegistry (in NPCSerializer)
   H2 - Event-driven interrupt: skips tick counter on high-threat or sudden HP drop
   H3 - Priority queue via LLMRequestQueue (avoids VRAM/API flooding)
   H4 - Guided one-shot retry before falling back to UtilityEvaluator
+  H5 - Trait coherence guard: post-inference override for Brave/Pacifist rules
 """
 
 from __future__ import annotations
@@ -120,6 +121,12 @@ class LLMDecisionSystem:
         # High-threat stimulus
         threat = ctx.get_top_percept("Threat")
         if threat and threat.threat_level >= self._interrupt_threat:
+            # Fear spike proportional to threat level × neuroticism
+            n = ctx.self_npc.psychology.neuroticism
+            spike = threat.threat_level * 0.3 * (0.5 + n * 0.5)
+            ctx.self_npc.psychology.set_fear(
+                min(1.0, ctx.self_npc.psychology.fear + spike)
+            )
             return True
         # Sudden HP drop (took damage since last tick)
         if (self._last_hp > 0 and
@@ -198,6 +205,9 @@ class LLMDecisionSystem:
             return None
         self._pending_response = None
 
+        # H5: Trait coherence guard — override logically contradictory LLM decisions
+        resp = self._enforce_trait_coherence(resp, ctx)
+
         # Resolve action_id → IAction
         for action in self._library.get_all():
             if action.action_id == resp.action_id:
@@ -207,6 +217,50 @@ class LLMDecisionSystem:
                     self.last_emotion = resp.emotion
                     return action
         return None
+
+    def _enforce_trait_coherence(self, resp: LLMResponse,
+                                 ctx: ActionContext) -> LLMResponse:
+        """
+        Override LLM decisions that contradict the NPC's hard trait rules.
+        This is a safety net (H5), not a replacement for good training data.
+        Overrides are logged in reasoning for diagnostics.
+        """
+        npc = ctx.self_npc
+
+        if resp.action_id == "flee":
+            threat = ctx.get_top_percept("Threat")
+            is_brave = npc.traits.has("Brave")
+            low_fear = npc.psychology.fear < 0.4
+            high_threat = threat and threat.threat_level >= 0.7
+
+            if is_brave and low_fear and high_threat:
+                # Brave NPC with low fear does not flee from a known threat
+                return LLMResponse(
+                    npc_id=resp.npc_id,
+                    reasoning=resp.reasoning + " [Brave override: standing ground]",
+                    action_id="attack",
+                    target_id=threat.object_id if threat else None,
+                    dialogue=None,
+                    emotion="Aggressive",
+                    raw=resp.raw,
+                    latency_ms=resp.latency_ms,
+                )
+
+        if resp.action_id == "attack":
+            if npc.traits.has("Pacifist"):
+                # Pacifist never attacks unprovoked
+                resp = LLMResponse(
+                    npc_id=resp.npc_id,
+                    reasoning=resp.reasoning + " [Pacifist override: won't fight]",
+                    action_id="flee",
+                    target_id=resp.target_id,
+                    dialogue=resp.dialogue,
+                    emotion=resp.emotion,
+                    raw=resp.raw,
+                    latency_ms=resp.latency_ms,
+                )
+
+        return resp
 
     # ── H4: Guided retry ──────────────────────────────────────────────────────
 

@@ -191,6 +191,19 @@ Model [valid_actions](file:///d:/DeepLearning/Projects/NLP_ABM_Sim/npc_sim/llm/n
 3. Bir kez daha denenir; hala hatalıysa [UtilityEvaluator](file:///d:/DeepLearning/Projects/NLP_ABM_Sim/npc_sim/decisions/utility_evaluator.py#43-60) fallback.
 4. Başarı oranını ~%70 artırır, inner monolog korunur.
 
+### H5 — Trait Coherence Guard (Post-Inference Override)
+
+Model çıktısı `_apply_pending()` içinde trait tutarlılığı denetiminden geçer.
+
+| Kural | Koşul | Override |
+|-------|-------|----------|
+| Brave → attack | `flee` seçildi VE `Brave` trait VE `fear < 0.4` VE `threat ≥ 0.7` | `action_id = "attack"` |
+| Pacifist → no-attack | `attack` seçildi VE `Pacifist` trait | `action_id = "flee"` |
+
+Bu mekanizma eğitim datasındaki istatistiksel gürültüye karşı bir güvenlik ağıdır.
+İyi eğitilmiş model bunu nadiren tetikler; override sayısı `LLMDecisionSystem`
+diagnostics çıktısına eklenmeli (ileride).
+
 ---
 
 ## 6. Eğitim Veri Formatı
@@ -270,6 +283,7 @@ training_args = TrainingArguments(
 | `reasoning` ortalama uzunluk | 30-100 token |
 | Interrupted tick doğru flee/attack oranı | ≥ %85 |
 | Fallback oranı (canlı sim'de) | ≤ %5 |
+| Trait coherence violations (Brave+flee override oranı) | ≤ %2 |
 
 ### 7.3 Ollama Model Yükleme
 

@@ -1,6 +1,6 @@
 # NPC-Sim
 
-**`npc_sim` · Version 1.0.2 · Python 3.10+**
+**`npc_sim` · Version 1.0.3 · Python 3.10+**
 
 > A **deterministic, civilization-scale NPC simulation framework** — originally conceived as a Unity package, now a fully standalone Python system with a local web dashboard and LLM-driven autonomous agent support.
 >
@@ -50,13 +50,14 @@ python run_diagnostic.py
 - **Salience evaluation** — psychology-aware attention (stressed NPCs prioritise threats)
 - **Percept expiry** — stale percepts automatically pruned
 
-### 🤖 LLM Integration (4 hardening mechanisms)
+### 🤖 LLM Integration (5 hardening mechanisms)
 | | Mechanism | Implementation |
 |-|-----------|---------------|
 | H1 | Semantic spatial context | `WorldRegistry` maps coordinates → zone labels (`MarketSquare`, `Tavern`, …) |
 | H2 | Event-driven interrupt | Threat ≥ 0.8 or HP drop ≥ 15 → LLM called immediately, bypassing tick counter |
 | H3 | Priority request queue | `LLMRequestQueue` — interrupt=0, focused=1, normal=5, background=10; serial Ollama |
 | H4 | Guided retry | Invalid `action_id` → one corrective prompt before fallback to `UtilityEvaluator` |
+| H5 | Trait coherence guard | Post-inference override: Brave+low-fear+high-threat → `attack`; Pacifist → no `attack` |
 
 ### 🌐 Web Dashboard & Simulation Control Panel
 - **Pre-Simulation Tuning** — adjust start time, tick speed, and NPC density on launch
@@ -110,7 +111,7 @@ static/            index.html, style.css, app.js  (web dashboard)
 | `flee` | Safety | Moves NPC away from highest-threat percept |
 | `gather` | Survival | Harvests food/water based on need urgency; capped at 5 items per resource |
 | `heal` | Health | Consumes medicine; reduces fear |
-| `attack` | Combat | Melee damage + belief propagation + reputation penalty |
+| `attack` | Combat | Melee damage + belief propagation + reputation penalty; eligible for Brave NPCs and any NPC that took ≥15% max-HP damage |
 | `socialize` | Social | Trust/affinity gain; gossips salient memory to ally |
 | `trade` | Economy | Gold ↔ food exchange; both parties gain trust |
 | `work` | Economy | Occupation-specific resource generation |
@@ -166,6 +167,7 @@ SimulationManager.tick()
     │   ├── LLMRequestQueue.submit()
     │   │    └── OllamaBackend.call() → LLMResponse
     │   │         └── [H4] guided retry on invalid action_id
+    │   ├── [H5] trait coherence guard (_enforce_trait_coherence)
     │   └── fallback: UtilityEvaluator
     └── SimLogger.log_npc_tick()     → logs/sim_full.csv (one row per NPC per tick)
 ```
