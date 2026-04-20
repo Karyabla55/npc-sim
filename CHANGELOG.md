@@ -5,6 +5,26 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.1.0] – 2026-04-20
+
+### Removed
+- **`OllamaBackend` Monolithic Processing**: Migrated architectural focus away from single-model JSON generation due to reasoning vs. valid-schema conflicts.
+
+### Added
+- **Asymmetric Dual-LLM Pipeline (`architecture.md` v2.0)**: Introduced a two-stage sequential workflow (Component A: 3B Reasoner for logic, Component B: 1B Formatter for schema).
+- **`Stateful_NPC/newgen-rpg.ipynb`**: Complete 34-cell Dual-Phase SFTTrainer notebook. Phase A trains 3B Reasoner on Chain-of-Thought, Phase B trains 1B Formatter on schema conversion. Evaluates individually.
+- **`Stateful_NPC/generator/npc_sim_generator_v2.py` (v4 Dataset Generator)**: 
+  - `generate_cot_reasoning()`: Generates 3-5 sentence Turkish first-person internal monologues.
+  - New Deviation Cases (D5-D8): Logic coverage for dual-crises, conflicted courage, schedule overrides, and trauma-driven fleeing.
+  - `generate_formatter_dataset()`: Derives the JSON conversion dataset automatically.
+  - `_paraphrase()`: Replaces synonyms randomly directly in the generated dataset for the formatter for robustness.
+
+### Changed
+- Moved `llm_data_spec.md` to `docs/llm_data_spec.md`.
+- Updated dataset schemas to explicitly support dual-dataset logic (Reasoner 10k + 2k, Formatter ~12k).
+
+---
+
 ## [1.0.3] – 2026-03-26
 
 ### Fixed

@@ -1,6 +1,6 @@
 # NPC-Sim
 
-**`npc_sim` · Version 1.0.3 · Python 3.10+**
+**`npc_sim` · Version 1.1.0 · Python 3.10+**
 
 > A **deterministic, civilization-scale NPC simulation framework** — originally conceived as a Unity package, now a fully standalone Python system with a local web dashboard and LLM-driven autonomous agent support.
 >
@@ -88,10 +88,11 @@ npc_sim/
                    LLMDecisionSystem
 
 Stateful_NPC/
-├── generator/     npc_sim_generator_v2.py  (upgraded dataset generator)
-│                  config.py, npc_state_machine.py  (original v6 generator)
-└── data/          train_v2.jsonl (~14 MB, 20k examples)
-                   test_v2.jsonl  (~4 MB, 2k examples)
+├── generator/     npc_sim_generator_v2.py  (v4 dual-llm dataset generator)
+├── newgen-rpg.ipynb (Dual-phase Llama 3 SFT)
+│                  config.py, npc_state_machine.py  (original v1 generator)
+└── data/          train_reasoner.jsonl (10k examples)
+                   train_formatter.jsonl (~12k examples)
 
 server.py          Flask + SocketIO backend
 run_diagnostic.py  Headless 6-hour sim runner + CSV log analyser
@@ -101,7 +102,7 @@ static/            index.html, style.css, app.js  (web dashboard)
 
 ---
 
-## Built-in Actions (11)
+## Built-in Actions (12)
 
 | `action_id` | Category | Behaviour |
 |-------------|---------|-----------|
@@ -120,33 +121,36 @@ static/            index.html, style.css, app.js  (web dashboard)
 
 ---
 
-## LLM Integration
+## LLM Integration (Dual-LLM Pipeline)
 
-The `LLMDecisionSystem` replaces `DecisionSystem` per-NPC:
+The `DualLLMBackend` splits reasoning and formatting across two specialized models:
 
 ```python
 from npc_sim.core.sim_config import SimulationConfig
 from npc_sim.simulation.simulation_manager import SimulationManager
 
 mgr = SimulationManager(SimulationConfig(
-    llm_backend="ollama",
-    llm_model="npc-sim-decision:latest",  # your fine-tuned model
+    llm_backend="dualllm",
+    llm_reasoner_url="http://localhost:11434",
+    llm_reasoner_model="npc-sim-reasoner:latest",  # 3B Model
+    llm_formatter_url="http://localhost:11435",
+    llm_formatter_model="npc-sim-formatter:latest",  # 1B Model
     llm_tick_every=5,
 ))
-mgr.enable_llm_for_all()   # or enable_llm_for("npc_id")
+mgr.enable_llm_for_all()
 ```
 
-See [`docs/llm_data_spec.md`](docs/llm_data_spec.md) for the full input/output schema.
+See [`docs/llm_data_spec.md`](docs/llm_data_spec.md) and [`docs/architecture.md`](docs/architecture.md) for data schema and full architecture details.
 
-### Training Data
+### Training Data (v4 Dataset)
 
-Generate v2 dataset (Big Five + all 11 actions + zone labels + memories):
+Generate v4 datasets (CoT text for Reasoner, explicit JSON format pairs for Formatter):
 
 ```bash
 cd Stateful_NPC/generator
 python npc_sim_generator_v2.py
-# → data/train_v2.jsonl  (20k examples)
-# → data/test_v2.jsonl   (2k examples)
+# → data/train_reasoner.jsonl  (10k examples)
+# → data/train_formatter.jsonl (~12k examples)
 ```
 
 ---

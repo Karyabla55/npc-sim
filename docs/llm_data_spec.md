@@ -1,24 +1,35 @@
 # NPC-Sim LLM Data Specification
 
-**Version:** 1.0 | **Author:** Sadık Abdusselam Albayrak | **License:** Apache 2.0
+**Version:** 2.0 (Dual-LLM) | **Author:** Sadık Abdusselam Albayrak | **License:** Apache 2.0
 
-Bu belge NPC-Sim'in LLM entegrasyon katmanının veri tiplerini, şemasını ve beklenen model davranışlarını tanımlar. Kendi modelini eğitecek araştırmacılar için birincil referans kaynağıdır.
+Bu belge NPC-Sim'in LLM entegrasyon katmanının veri tiplerini, şemasını ve beklenen model davranışlarını tanımlar. Asimetrik Dual-LLM mimarisi kullanarak kendi modelini eğitecek araştırmacılar için birincil referans kaynağıdır.
 
 ---
 
-## 1. Genel Mimari
+## 1. Genel Mimari (Dual-LLM Pipeline)
 
-```
-SimulationManager.tick()
-    └─ LLMDecisionSystem.tick(ctx)
-         ├─ [H2] Interrupt kontrol → anında tetikle
-         ├─ NPCSerializer.build_payload() → JSON string
-         ├─ LLMRequestQueue.submit(priority) → [H3]
-         │       └─ OllamaBackend.call() → LLMResponse
-         │               └─ schema doğrulama
-         │                       ├─ [H4] guided retry (geçersiz action_id)
-         │                       └─ fallback → UtilityEvaluator
-         └─ action.execute(ctx)
+```text
+NPC State JSON
+      │
+      ▼
+┌─────────────────────────────────────────┐
+│  Component A — Logic Node (Reasoner)    │
+│  Input : full NPC state JSON            │
+│  Output: Turkish first-person rationale │
+└────────────────┬────────────────────────┘
+                 │ plain Turkish text
+                 ▼
+┌─────────────────────────────────────────┐
+│  Component B — Translation Node         │
+│               (Formatter)               │
+│  Input : Component A text               │
+│  Output: strictly typed JSON            │
+└────────────────┬────────────────────────┘
+                 │ LLMResponse
+                 ▼
+         _apply_pending()
+         _enforce_trait_coherence() (H5)
+         action.execute(ctx)
 ```
 
 ---
@@ -143,7 +154,8 @@ Model [valid_actions](file:///d:/DeepLearning/Projects/NLP_ABM_Sim/npc_sim/llm/n
 
 | [action_id](file:///d:/DeepLearning/Projects/NLP_ABM_Sim/npc_sim/decisions/action.py#19-23) | Kategori | Ne zaman uygun? |
 |-------------|---------|----------------|
-| [eat](file:///d:/DeepLearning/Projects/NLP_ABM_Sim/npc_sim/npc/npc_factory.py#18-31) | Hayatta Kalma | `vitals.hun > 0.65` VE [inv](file:///d:/DeepLearning/Projects/NLP_ABM_Sim/npc_sim/llm/npc_serializer.py#96-101)'de food var |
+| `eat` | Hayatta Kalma | `vitals.hun > 0.65` VE `inv`'de food var |
+| `drink` | Hayatta Kalma | `vitals.thi > 0.65` VE `inv`'de water var |
 | `sleep` | Hayatta Kalma | `vitals.en < 0.3` — enerji kritik |
 | `flee` | Tehdit | Threat percept var VE NPC savaşçı değil / HP düşük |
 | `gather` | Kaynak | Yiyecek/kaynak percept var, stoklar düşük |
@@ -227,12 +239,13 @@ Her satır bağımsız bir eğitim örneği (JSONL):
 {OUTPUT_JSON}<|eot_id|>
 ```
 
-### 6.3 Veri Dağılımı (v2 Jeneratör)
+### 6.3 Veri Dağılımı (v4 Jeneratör - Dual LLM)
 
-| Dosya | Örnek | Boyut |
-|-------|-------|-------|
-| `train_v2.jsonl` | 20,000 | ~18 MB |
-| `test_v2.jsonl` | 2,000 | ~1.8 MB |
+| Dosya | Özellik | Örnek |
+|-------|---------|-------|
+| `train_reasoner.jsonl` | Component A (Reasoner) eğitim verisi | 10,000 |
+| `test_reasoner.jsonl` | Component A test verisi | 2,000 |
+| `train_formatter.jsonl` | Component B (Formatter) verisi (~%17.5 paraphrase) | ~12,000 |
 
 Dağılım:
 - 5 arketip × 15 rol = 75 temel kombinasyon
@@ -285,12 +298,17 @@ training_args = TrainingArguments(
 | Fallback oranı (canlı sim'de) | ≤ %5 |
 | Trait coherence violations (Brave+flee override oranı) | ≤ %2 |
 
-### 7.3 Ollama Model Yükleme
+### 7.3 Ollama Dual-Process Yükleme
 
+İki ayrı Ollama process'i (port 11434 ve 11435) üzerinden:
 ```bash
-# Quantize edilmiş modeli Ollama'ya yükle
-ollama create npc-sim-decision -f Modelfile
-ollama run npc-sim-decision
+ollama create npc-sim-reasoner -f Modelfile.reasoner
+ollama create npc-sim-formatter -f Modelfile.formatter
+
+# Port 1
+OLLAMA_HOST=127.0.0.1:11434 ollama serve
+# Port 2
+OLLAMA_HOST=127.0.0.1:11435 ollama serve
 ```
 
 ```dockerfile
