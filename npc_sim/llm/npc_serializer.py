@@ -157,12 +157,6 @@ class NPCSerializer:
 
     def _valid_actions(self, ctx: ActionContext) -> list[str]:
         """Only include actions that pass is_valid() for token efficiency."""
-        from npc_sim.decisions.utility_evaluator import UtilityEvaluator
-        valid = []
-        for action in ctx.world._get_action_library_if_set() if hasattr(ctx.world, '_get_action_library_if_set') else []:
-            if action.is_valid(ctx):
-                valid.append(action.action_id)
-        # Fallback: include all action IDs from the library
-        if not valid and hasattr(ctx, '_action_library'):
-            valid = [a.action_id for a in ctx._action_library.get_all() if a.is_valid(ctx)]
-        return valid
+        if not hasattr(ctx, '_action_library'):
+            return []
+        return [a.action_id for a in ctx._action_library.get_all() if a.is_valid(ctx)]

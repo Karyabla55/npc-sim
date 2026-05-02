@@ -112,8 +112,8 @@ class SleepAction(IAction):
     action_type = "Sleep"
 
     def create_lock(self) -> ActionLock:
-        return ActionLock(self.action_id, 3600.0, 
-                          lambda ctx: ctx.self_npc.vitals.energy_norm >= 0.95, 
+        return ActionLock(self.action_id, 480.0,
+                          lambda ctx: ctx.self_npc.vitals.energy_norm >= 0.95,
                           interrupt_allowed=True)
 
     def is_valid(self, ctx: ActionContext) -> bool:
@@ -130,7 +130,7 @@ class SleepAction(IAction):
 
     def execute(self, ctx: ActionContext) -> None:
         v = ctx.self_npc.vitals
-        restore = 0.15 * v.max_energy * ctx.delta_time
+        restore = 0.002 * v.max_energy * ctx.delta_time
         v.restore_energy(restore)
         v.set_stress(max(0.0, v.stress - 0.02 * ctx.delta_time))
         for g in ctx.goals.get_by_type(GoalType.REST):
@@ -515,7 +515,7 @@ class WorkAction(IAction):
 
     def execute(self, ctx: ActionContext) -> None:
         npc = ctx.self_npc
-        npc.vitals.consume_energy(5.0 * ctx.delta_time)
+        npc.vitals.consume_energy(0.167 * ctx.delta_time)
         
         efficiency = max(0.05, npc.vitals.energy_norm)
         occ = npc.identity.occupation.lower()

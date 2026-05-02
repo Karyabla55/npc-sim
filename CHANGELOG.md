@@ -5,6 +5,39 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.0] – 2026-05-02
+
+### Fixed
+
+- **Bug #21 — Action lock broken by `is_valid()` during `min_duration`** (`npc_sim/decisions/decision_system.py`):
+  Removed `is_valid()` check from the `min_duration` window. Lock is now truly unbreakable
+  during minimum duration — only `hard_interrupt` can break it. This eliminates the Scholar
+  Sleep↔Work oscillation (~57 cycles/sim-day → proper 8-hour shifts).
+
+- **Bug #22 — `WorkAction` energy drain 30× too high** (`npc_sim/decisions/actions/builtin.py`):
+  Changed `consume_energy(5.0 * ctx.delta_time)` → `consume_energy(0.167 * ctx.delta_time)`.
+  Drains ~80 energy (100→20 threshold) over 480 sim-seconds = one 8-hour sim-day work shift.
+
+- **Bug #23 — `SleepAction` restore rate 75× too fast + `min_duration` 2.5× sim-days** (`npc_sim/decisions/actions/builtin.py`):
+  (a) Restore rate `0.15 → 0.002`: full energy recovery now takes ~480 sim-seconds instead of 6.7 sim-seconds.
+  (b) `min_duration` `3600.0 → 480.0` sim-seconds: sleep lock now covers one 8-sim-hour shift
+  in a 1440-second sim-day (was 2.5 sim-days).
+
+- **Bug #13 — Action lock created after `execute()`** (`npc_sim/decisions/decision_system.py`):
+  Lock is now created before `execute()` runs. First tick of every multi-tick action is
+  immediately covered by the lock, preventing single-tick interruption on action start.
+
+- **Bug #11 — `_valid_actions()` fragile fallback** (`npc_sim/llm/npc_serializer.py`):
+  Removed the non-functional `ctx.world._get_action_library_if_set()` primary path.
+  Method now directly uses `ctx._action_library`, which is always set by `SimulationManager`.
+
+### Documentation
+
+- `docs/bugs_and_issues.md`: Marked bugs #1, #2, #3, #6, #7, #10 as FIXED in v1.2.0
+  (they were fixed but not documented in the previous release).
+
+---
+
 ## [1.2.0] – 2026-05-02
 
 ### Fixed

@@ -15,7 +15,7 @@
 | **Issue** | Line 98 references `self._tick_counter = 0` but this attribute is never initialized in `__init__()`. Will raise `AttributeError` on first interrupt trigger. |
 | **Impact** | Simulation crashes when any NPC experiences a high-threat interrupt or sudden HP drop. |
 | **Fix** | Add `self._tick_counter: int = 0` to `__init__()` around line 54-56. |
-| **Status** | PENDING |
+| **Status** | **FIXED — v1.2.0** · `self._tick_counter: int = 0` added to `__init__()` at line 58. |
 
 ---
 
@@ -26,7 +26,7 @@
 | **Issue** | Action returned from `_apply_pending()` is executed again in `tick()`. The `_apply_pending()` method already calls `action.execute(ctx)` internally (via the action resolution loop), but `tick()` also calls `action.execute(ctx)` on line 108 before returning. |
 | **Impact** | LLM-selected actions execute twice per tick, causing double resource consumption, double damage, etc. |
 | **Fix** | Remove `action.execute(ctx)` from line 108 — `_apply_pending()` should only return the action, not execute it. OR: have `_apply_pending()` return without executing. |
-| **Status** | PENDING |
+| **Status** | **FIXED — v1.2.0** · `_apply_pending()` returns the action without executing it; `tick()` calls `execute()` exactly once at line 108. |
 
 ---
 
@@ -37,7 +37,7 @@
 | **Issue** | Early `continue` on line 198 skips dead NPCs entirely. Death detection (lines 230-235) sets `event_type`/`event_detail` but these values are never captured in the log because the loop continues before reaching `log_npc_tick()`. |
 | **Impact** | Death events not recorded in CSV logs. Cannot analyze mortality patterns or validate death_by_neglect mechanics. |
 | **Fix** | Move death detection BEFORE the `continue` check, or change condition to allow one final log pass for newly-dead NPCs. |
-| **Status** | PENDING |
+| **Status** | **FIXED — v1.2.0** · Death detection block restructured: `was_alive` captured before tick, newly-dead NPCs detected at lines 253-257, logged with `event_type="Death"` before `continue`. Previously-dead NPCs get one final log entry and are skipped via `_death_logged` set. |
 
 ---
 
@@ -72,7 +72,7 @@
 | **Issue** | Docstring says "LLM is only called on explicit triggers (H2 interrupt)" but method only checks `self._pending`. The `interrupt` parameter passed in is completely ignored. |
 | **Impact** | Confusing API. Currently works by accident because caller checks interrupt first, but violates single responsibility. |
 | **Fix** | Either remove `interrupt` parameter or use it in the return logic. Update docstring to match actual behavior. |
-| **Status** | PENDING |
+| **Status** | **FIXED — v1.2.0** · Method now returns `interrupt` directly (`return interrupt` at line 142), making the parameter usage explicit and intentional. |
 
 ---
 
@@ -83,7 +83,7 @@
 | **Issue** | Comment says "anger peaks during combat and only cools post-combat" but condition `if not threat_present` lowers anger when threat is GONE. Should be: threat present = anger rises, threat gone = anger cools. Current code does the opposite. |
 | **Impact** | NPCs calm down DURING combat and get angrier AFTER combat ends. |
 | **Fix** | Invert condition: `if threat_present: anger += 0.05` and `else: anger -= 0.15`. |
-| **Status** | PENDING |
+| **Status** | **FIXED — v1.2.0** · `if not threat_present: anger -= 0.15` else `anger += 0.05`. Since `execute()` early-returns when no threat is present, this branch always runs with a live threat, so anger correctly rises during combat. |
 
 ---
 
@@ -116,7 +116,7 @@
 | **Issue** | Lines 131-134 call `ItemIds.FOOD`, `ItemIds.WATER`, etc. inside `log_npc_tick()`. The fallback dummy class (lines 214-215) defines attributes as semicolon-separated string `"food"; "water"` which is invalid Python syntax — should be separate assignments. |
 | **Impact** | If `npc_sim.npc.inventory` fails to import, logger crashes with `AttributeError`. |
 | **Fix** | Fix dummy class: `FOOD = "food"; WATER = "water"` → separate lines or proper class body. |
-| **Status** | PENDING |
+| **Status** | **FIXED — v1.2.0** · Dummy class uses valid single-line syntax (`FOOD = "food"; WATER = "water"; MEDICINE = "medicine"; GOLD = "gold"`). Python class bodies accept semicolon-separated statements. |
 
 ---
 
@@ -127,7 +127,7 @@
 | **Issue** | While serving a lock's `min_duration`, the system checks `is_valid()` on the locked action (lines 55 and 69). If False, the lock is immediately cleared and normal evaluation runs. `SleepAction.is_valid()` requires `energy_norm < 0.35`; the restore rate (`0.15 × max_energy × delta_time`) crosses this threshold in **1-3 ticks**, so the sleep lock breaks almost immediately. The NPC then evaluates freely, Work wins, drains energy back below the threshold, and the cycle repeats every 1-5 ticks. **CSV evidence:** Scholar oscillates Sleep↔Work at tick 271-277 (sim_hour 6.45-6.46), cycling ~57 times per sim-day. |
 | **Impact** | Core simulation behavioral failure. NPCs never sustain work or sleep — they flicker every few ticks instead of serving meaningful shifts. Makes the simulation unusable for behavior research. |
 | **Fix** | Remove the `is_valid()` check inside the `min_duration` phase (lines 55-56 and 69-70). During minimum duration only `hard_interrupt` should be able to break the lock. `is_valid()` and `exit_condition` should only apply after `min_duration` has elapsed. |
-| **Status** | PENDING |
+| **Status** | **FIXED — v1.3.0** · Removed `is_valid()` call from the `min_duration` window. Lock now runs execute() unconditionally during minimum duration; `is_valid()` and `exit_condition` checks remain only in the post-min_duration branch. |
 
 ---
 
@@ -138,7 +138,7 @@
 | **Issue** | `consume_energy(5.0 * ctx.delta_time)` drains 5.0 units/sim-second. With `delta_time = 0.1` sim-sec/tick this is 0.5 units/tick. For an NPC with `max_energy ≈ 90`, energy is exhausted (`energy_norm < 0.35`) in **≈ 18 sim-minutes** (108 ticks). An 8-hour work shift in a 1440-second day requires only ≈ 0.077 units/sim-second above the base `energy_decay_rate` of 0.073. The configured value is 65× larger. Base decay alone (`energy_decay_rate = 0.073`) already drains energy over ≈ 20 sim-hours; the action rate should be a modest multiplier (e.g. 2–3×), not 69×. |
 | **Impact** | Even if bug #21 is fixed (locks hold), NPCs exhaust themselves in 18 sim-minutes per shift. Combined with #21, WorkAction is the engine of the rapid cycling loop. |
 | **Fix** | Replace `5.0` with a value that drains ≈ 60-70% of max_energy over an 8-hour shift (480 sim-sec): `consume_energy(0.10 * ctx.delta_time)` (≈ 1.4× the base decay, net drain ≈ 0.173 units/sim-sec → 83 units over 480 sec ≈ 92% for max_energy=90, or tune as needed). |
-| **Status** | PENDING |
+| **Status** | **FIXED — v1.3.0** · Changed `5.0` → `0.167`. Drains ≈ 80 energy (100→20 threshold) over 480 sim-seconds = 8 sim-hour work shift. |
 
 ---
 
@@ -151,7 +151,7 @@
 | **Issue** | `ctx.world._get_action_library_if_set()` method doesn't exist on `SimWorldAdapter`. Fallback to `ctx._action_library` works but relies on undocumented attribute. |
 | **Impact** | `valid_actions` list may be empty if fallback fails, causing LLM to hallucinate invalid action IDs. |
 | **Fix** | Add `get_action_library()` method to `SimWorldAdapter` or pass `ActionLibrary` directly to `NPCSerializer`. |
-| **Status** | PENDING |
+| **Status** | **FIXED — v1.3.0** · Removed broken primary path (`ctx.world._get_action_library_if_set`). Method now directly uses `ctx._action_library` which is always set by `SimulationManager`. |
 
 ---
 
@@ -173,7 +173,7 @@
 | **Issue** | Lock is created after `execute()` runs (line 86), meaning the action runs once before lock state is saved. Multi-tick actions lose their first tick of lock enforcement. |
 | **Impact** | First tick of multi-tick actions (Work, Sleep) can be interrupted immediately. |
 | **Fix** | Create lock BEFORE execute, store it, then execute. Or pass lock to execute for continuity. |
-| **Status** | PENDING |
+| **Status** | **FIXED — v1.3.0** · Lock now created before `execute()` call. First tick of every action is immediately covered by the lock. |
 
 ---
 
@@ -206,7 +206,7 @@
 | **Issue** | Two separate calibration errors compound each other: **(a) Restore rate too fast:** `SleepAction.execute()` uses `restore = 0.15 * max_energy * delta_time`. For Scholar (`max_energy=90`, `delta_time=0.1`): 13.5 units/sim-second → full recovery in **6.7 sim-seconds** (0.1 sim-minutes). For a realistic 8-hour sleep cycle (480 sim-sec), the rate should be ≈ 0.122 units/sim-sec. Current rate is 110× too fast. **(b) Lock `min_duration` wrong scale:** `SleepAction.min_duration = 3600` sim-seconds = **2.5 sim-days** in a 1440-sec day. `WorkAction.min_duration = 1800` sim-seconds = **1.25 sim-days**. These values are calibrated for an 86400-second (real-world) day. For an 8-hour sleep or work shift in a 1440-sec day: target `min_duration ≈ 480` sim-seconds. Note: currently masked by bug #21 (lock breaks before min_duration matters), but becomes the primary symptom after #21 is fixed. |
 | **Impact** | (a) Even with locks correctly enforced, NPCs fully recover in 7 sim-seconds and the `exit_condition` (`energy_norm ≥ 0.95`) fires immediately, yielding 7-second sleep cycles. (b) If restore rate is fixed without fixing `min_duration`, NPCs sleep for 2.5 sim-days before being allowed to exit. Both issues must be fixed together with bug #22 for a coherent 24-hour lifecycle. |
 | **Fix** | (a) Change restore formula: `restore = (0.122 / max_energy) * max_energy * delta_time` → simplifies to `restore = 0.122 * delta_time` (tune to ≈ 8-hour full recovery). (b) Change both lock durations from `3600` → `480` and `1800` → `480` sim-seconds (adjust as desired for balance). |
-| **Status** | PENDING |
+| **Status** | **FIXED — v1.3.0** · (a) Restore rate changed `0.15 → 0.002` (≈ 480 sim-sec full recovery). (b) SleepAction `min_duration` changed `3600.0 → 480.0` sim-seconds (8 sim-hours in a 1440-sec day). |
 
 ---
 

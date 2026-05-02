@@ -49,15 +49,11 @@ class DecisionSystem:
                 self._active_lock = None  # Lock broken by interrupt
             else:
                 if self._lock_elapsed < self._active_lock.min_duration_sim_seconds:
-                    # Still serving minimum duration
+                    # Still serving minimum duration — lock is unbreakable here
                     locked_action = self._library.get(self._active_lock.action_id)
                     if locked_action:
-                        if not locked_action.is_valid(ctx):
-                            self._active_lock = None
-                        else:
-                            # Continue executing the locked action
-                            locked_action.execute(ctx)
-                            return locked_action
+                        locked_action.execute(ctx)
+                        return locked_action
                 else:
                     # Min duration elapsed, check arbitrary exit condition
                     if self._active_lock.exit_condition(ctx):
@@ -83,16 +79,14 @@ class DecisionSystem:
                 best_action = action
 
         if best_action is not None:
-            best_action.execute(ctx)
-            self.last_selected_action = best_action
-            self.last_score = best_score
-            
-            # Create a new lock for this action if it has lock configuration
             if hasattr(best_action, 'create_lock') and callable(getattr(best_action, 'create_lock')):
                 self._active_lock = best_action.create_lock()
                 self._lock_elapsed = 0.0
             else:
                 self._active_lock = None
+            best_action.execute(ctx)
+            self.last_selected_action = best_action
+            self.last_score = best_score
 
         return best_action
 
