@@ -5,6 +5,71 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.2.0] – 2026-05-02
+
+### Fixed
+
+- **Bug #4 — `WalkToAction.evaluate()` variable shadowing** (`npc_sim/decisions/actions/builtin.py`):
+  Renamed inner `target` to `market_pos`, added explicit `is not None` guard before
+  `SimVector3.distance()`. Eliminates potential `AttributeError` when Market zone is not registered.
+
+- **Bug #5 — `LLMRequestQueue.shutdown()` silent** (`npc_sim/llm/llm_request_queue.py`):
+  Added `notify_all()` on the `Condition` inside `shutdown()` so the dispatcher thread wakes
+  immediately rather than waiting up to 100ms for the condition timeout.
+
+- **Bug #8 — Death by neglect rate too high** (`npc_sim/npc/npc.py`):
+  Reduced `apply_damage(10.0 * delta_time)` → `apply_damage(1.0 * delta_time)`. NPCs now
+  survive ~100 seconds of maxed-out hunger/thirst, giving recovery behaviors (Eat, Drink,
+  Gather) time to fire.
+
+- **Bug #9 — Trait modifier applied after curve shaping** (`npc_sim/decisions/utility_evaluator.py`):
+  Trait modifier is now applied to the raw score before the response curve shapes it.
+  Functionally equivalent for the default `LinearCurve`; semantically correct for non-linear
+  curves (`QuadraticCurve`, `SigmoidCurve`).
+
+- **Bug #12 — `GatherAction.execute()` uncapped** (`npc_sim/decisions/actions/builtin.py`):
+  Added per-resource cap enforcement (≤ 5 items) inside `execute()`, matching the cap in
+  `is_valid()`. Correctly falls back to gathering the other resource when one is full.
+
+- **Bug #14 — EOS token stripping fragile** (`npc_sim/llm/llm_backend.py`):
+  Replaced sequential `str.find()` loop with a single `re.sub()` regex pass covering all EOS
+  artifacts (`<|eot_id|>`, `<|end_of_text|>`, `<|eot`, `espo*`) atomically.
+
+- **Bug #19 — `FleeAction` lock duration = 0.0** (`npc_sim/decisions/actions/builtin.py`):
+  Changed `min_duration_sim_seconds` from `0.0` to `8.0`. NPCs now commit to fleeing for at
+  least 8 sim-seconds, preventing oscillation. Exit condition (threat disappears) still
+  provides early termination.
+
+- **`LLMDecisionSystem._focused` class variable** (`npc_sim/llm/llm_decision_system.py`):
+  Moved `self._focused = False` initialization to `__init__()` and removed the class-level
+  attribute. Each `LLMDecisionSystem` instance now has independent focus state.
+
+### Added
+
+- **`NPCPsychology` increment helpers** (`npc_sim/npc/psychology.py`):
+  Added `increase_anger()`, `decrease_anger()`, `increase_fear()`, `decrease_fear()`,
+  `increase_happiness()`, `decrease_happiness()`. Delegates to existing clamped setters;
+  provides a consistent increment API matching `NPCVitals`.
+
+- **`/api/llm/status` REST endpoint** (`server.py`):
+  Returns `get_llm_stats_full()` dict with per-NPC LLM call/fallback/retry counts.
+
+- **`/api/npc/<npc_id>` REST endpoint** (`server.py`):
+  Returns the full snapshot for a single NPC by ID. 404 if NPC not found or no simulation running.
+
+- **`llm_enable_all` / `llm_disable_all` SocketIO events** (`server.py`):
+  Allows web clients to hot-swap all NPCs to/from LLM decision-making in a single message.
+
+- **`run_diagnostic.py` — three additional pass/fail checks**:
+  SleepAction present in distribution, at least one NPC has an active goal (`top_goal` not
+  empty), multiple mood labels observed (psychology is not static). Total checks: 5 → 8.
+
+### Changed
+
+- Version: `1.0.3` → `1.2.0` in `pyproject.toml` and `npc_sim/__init__.py`.
+
+---
+
 ## [1.1.0] – 2026-04-20
 
 ### Removed

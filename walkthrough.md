@@ -1,3 +1,86 @@
+Walkthrough — NPC-Sim v1.2.0 Bugfix & API Release
+
+What Was Done
+
+Step 1 — Bug Audit
+
+A source-level code audit of 20 documented bugs in docs/bugs_and_issues.md verified which were real,
+which were already fixed in prior releases, and which needed new fixes.
+
+Pre-existing correct code (no change needed):
+- Bug #1 (_tick_counter): Already initialized in __init__() at line 58 — not a real bug.
+- Bug #2 (double-execute): _apply_pending() only returns the action; no double execution.
+- Bug #3 (death logging): Already handled before the continue guard in simulation_manager.py.
+- Bug #6 (_should_call_llm): interrupt parameter IS used in the return statement.
+- Bug #7 (anger inverted): Code logic is correct; comment confirms intent.
+- Bug #10 (dummy ItemIds): Semicolon-separated assignments are valid Python syntax.
+
+Step 2 — Fixes Applied
+
+npc_sim/npc/npc.py:
+  Death by neglect rate 10.0*dt → 1.0*dt (Bug #8).
+  At tick_rate=10, NPCs now survive ~100s of maxed hunger/thirst instead of ~10s.
+
+npc_sim/decisions/actions/builtin.py:
+  FleeAction.create_lock(): min_duration 0.0 → 8.0 sim-seconds (Bug #19).
+    Prevents oscillation; exit condition (threat gone) still allows early exit.
+  GatherAction.execute(): cap at 5 items per resource enforced (Bug #12).
+    Falls back to other resource when one slot is full.
+  WalkToAction.evaluate(): renamed inner `target` → `market_pos`, added is not None guard (Bug #4).
+
+npc_sim/llm/llm_decision_system.py:
+  _focused moved from class variable to instance variable in __init__() (undocumented bug).
+  Previously all LLMDecisionSystem instances shared one _focused flag.
+
+npc_sim/llm/llm_request_queue.py:
+  shutdown(): added notify_all() so dispatcher thread exits immediately (Bug #5 partial).
+
+npc_sim/decisions/utility_evaluator.py:
+  Trait modifier applied BEFORE curve shaping, not after (Bug #9).
+  Equivalent for LinearCurve; semantically correct for QuadraticCurve/SigmoidCurve.
+
+npc_sim/llm/llm_backend.py:
+  EOS token stripping: replaced sequential find() loop with single re.sub() regex (Bug #14).
+
+Step 3 — API Additions
+
+npc_sim/npc/psychology.py:
+  6 increment helper methods: increase_anger/decrease_anger, increase_fear/decrease_fear,
+  increase_happiness/decrease_happiness. Delegates to existing clamped setters.
+
+server.py:
+  GET /api/llm/status — returns get_llm_stats_full() with per-NPC LLM metrics.
+  GET /api/npc/<npc_id> — returns full snapshot for one NPC (404 if missing).
+  SocketIO llm_enable_all / llm_disable_all — hot-swap all NPCs in one message.
+
+run_diagnostic.py:
+  3 new pass/fail checks: SleepAction present, memory_count > 0, multiple mood labels.
+  Total: 5 → 8 checks.
+
+Step 4 — Documentation
+
+CHANGELOG.md: v1.2.0 entry with all Fixed/Added/Changed items.
+docs/bugs_and_issues.md: #4, #5, #8, #9, #12, #14, #19 marked FIXED — v1.2.0.
+pyproject.toml + npc_sim/__init__.py: version 1.0.3 → 1.2.0.
+
+Files Changed
+
+File                                      Change
+npc_sim/npc/npc.py                        death rate 10.0→1.0 (Bug #8)
+npc_sim/decisions/actions/builtin.py      Flee lock, Gather cap, WalkTo shadow (Bugs #4, #12, #19)
+npc_sim/llm/llm_decision_system.py        _focused instance var
+npc_sim/llm/llm_request_queue.py          shutdown notify_all (Bug #5)
+npc_sim/decisions/utility_evaluator.py    modifier order (Bug #9)
+npc_sim/llm/llm_backend.py               regex EOS stripping (Bug #14)
+npc_sim/npc/psychology.py                 6 increment helpers
+server.py                                 2 REST + 2 SocketIO endpoints
+run_diagnostic.py                         3 new pass/fail checks
+CHANGELOG.md                              v1.2.0 entry
+docs/bugs_and_issues.md                   FIXED status on 7 bugs
+pyproject.toml + npc_sim/__init__.py      version → 1.2.0
+
+---
+
 Walkthrough — NPC-Sim v1.0.1 Diagnostic & Fix Session
 What Was Done
 Step 1 — SimLogger (

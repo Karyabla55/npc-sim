@@ -269,6 +269,15 @@ def print_summary(log_path: str) -> None:
         ("LLM fallback rate ≤ 5%",
          fb_rate <= 5.0 or llm_calls == 0,
          f"rate={fb_rate:.1f}%"),
+        ("SleepAction present in distribution",
+         "Sleep" in action_dist,
+         f"sleep_count={action_dist.get('Sleep', 0)}"),
+        ("At least 1 NPC had active goals (top_goal not empty)",
+         any(r.get("top_goal", "") not in ("", None) for r in rows),
+         ""),
+        ("Multiple mood labels observed (psychology not static)",
+         len({r.get("mood") for r in rows if r.get("mood")}) > 1,
+         f"moods={sorted({r.get('mood') for r in rows if r.get('mood')})}"),
     ]
 
     all_pass = True

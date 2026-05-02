@@ -54,6 +54,7 @@ class UtilityEvaluator:
             return 0.0
 
         raw = max(0.0, min(action.evaluate(ctx), 1.0))
-        shaped = (curve or self.default_curve).evaluate(raw)
         modifier = ctx.self_npc.traits.get_weight_modifier(action.action_type)
-        return max(0.0, min(shaped * modifier, 1.0))
+        modified = max(0.0, min(raw * modifier, 1.0))
+        shaped = (curve or self.default_curve).evaluate(modified)
+        return max(0.0, min(shaped, 1.0))

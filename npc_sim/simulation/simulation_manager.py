@@ -81,6 +81,7 @@ class SimulationManager:
         self._vital_trackers: dict[str, VitalThresholdTracker] = {}
 
         self.tick_count: int = 0
+        self._death_logged: set[str] = set()
 
     # ── NPC management ──
 
@@ -193,8 +194,28 @@ class SimulationManager:
             npc_id = npc.identity.npc_id
             was_alive = npc.vitals.is_alive
 
-            if not npc.is_active or not was_alive:
-                # Still log dead NPCs once so final state is captured
+            if not npc.is_active:
+                continue
+            if not was_alive:
+                if npc_id not in self._death_logged:
+                    self._death_logged.add(npc_id)
+                    _dzone = ""
+                    if self.world_registry:
+                        _dzone = self.world_registry.resolve(
+                            npc.position.x, npc.position.z).get("zone", "")
+                    self.logger.log_npc_tick(
+                        tick=self.tick_count,
+                        sim_day=self.clock.current_day,
+                        sim_hour=self.clock.current_hour,
+                        npc=npc,
+                        percepts=[],
+                        action_selected="Dead",
+                        action_valid=False,
+                        event_type="Death",
+                        event_detail=f"NPC died at tick {self.tick_count}",
+                        death_cause="health=0",
+                        zone=_dzone,
+                    )
                 continue
 
             # Perception
@@ -229,10 +250,11 @@ class SimulationManager:
 
             # Death detection
             death_cause = ""
-            if was_alive and not npc.vitals.is_alive:
+            if not npc.vitals.is_alive:
                 death_cause = "health=0"
                 event_type = "Death"
                 event_detail = f"NPC died at tick {self.tick_count}"
+                self._death_logged.add(npc_id)
 
             # Decision
             llm_ds = self._llm_decision_systems.get(npc_id)

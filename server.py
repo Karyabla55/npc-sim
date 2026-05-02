@@ -219,6 +219,35 @@ def on_inject_stimulus(data):
     ))
 
 
+@socketio.on("llm_enable_all")
+def on_llm_enable_all():
+    if manager:
+        manager.enable_llm_for_all()
+
+
+@socketio.on("llm_disable_all")
+def on_llm_disable_all():
+    if manager:
+        manager.disable_llm_for_all()
+
+
+@app.route("/api/llm/status")
+def get_llm_status():
+    if manager:
+        return jsonify(manager.get_llm_stats_full())
+    return jsonify({"queue": {}, "per_npc": {}})
+
+
+@app.route("/api/npc/<npc_id>")
+def get_npc(npc_id: str):
+    if not manager:
+        return jsonify({"error": "No simulation running"}), 404
+    npc = manager.world.get_npc_by_id(npc_id)
+    if npc is None:
+        return jsonify({"error": f"NPC '{npc_id}' not found"}), 404
+    return jsonify(manager._npc_snapshot(npc))
+
+
 # ── Main ──
 
 if __name__ == "__main__":

@@ -48,7 +48,7 @@
 | **Issue** | Line 622 reassigns `target = WorldMap.get_zone("Market")` but `get_zone()` can return `None`. Line 624 then calls `SimVector3.distance(ctx.self_npc.position, target)` which raises `AttributeError` if `target is None`. |
 | **Impact** | Crash when NPC tries to walk to Market zone that doesn't exist or isn't registered. |
 | **Fix** | Add null check: `if target: dist = SimVector3.distance(...)` before using `target`. |
-| **Status** | PENDING |
+| **Status** | **FIXED — v1.2.0** · Renamed inner variable to `market_pos`, added explicit `is not None` guard. |
 
 ---
 
@@ -59,7 +59,7 @@
 | **Issue** | `_pop_highest()` acquires `_heap_lock`, but `submit()` also uses this lock. The dispatcher thread can pop while `submit()` is mid-operation (between counter increment and heap push). No condition variable for proper signaling. |
 | **Impact** | Potential for lost requests or heap corruption under high concurrency. |
 | **Fix** | Use `threading.Condition` instead of plain `Lock`. Signal condition on submit, wait on empty heap. |
-| **Status** | PENDING |
+| **Status** | **FIXED (partial) — v1.2.0** · `Condition` was already in place; added `notify_all()` to `shutdown()` so dispatcher exits immediately instead of waiting 100ms timeout. |
 
 ---
 
@@ -94,7 +94,7 @@
 | **Issue** | When `hunger >= 1.0` or `thirst >= 1.0`, damage is `10.0 * delta_time` per tick. At 10 ticks/sec with `delta_time ~0.1`, that's 1.0 damage/tick = 10 damage/sec. At 100 HP, death in 10 seconds. |
 | **Impact** | NPCs die almost instantly when needs max out. No time for rescue or recovery behaviors. |
 | **Fix** | Reduce to `1.0 * delta_time` (death in ~100 seconds) or `0.5 * delta_time` for more dramatic starvation. |
-| **Status** | PENDING |
+| **Status** | **FIXED — v1.2.0** · Changed `10.0 * delta_time` → `1.0 * delta_time`. NPCs now survive ~100s of maxed needs, giving recovery behaviors time to fire. |
 
 ---
 
@@ -105,7 +105,7 @@
 | **Issue** | Curve shaping (line 57) compresses dynamic range, THEN trait modifier is applied (line 58). A `0.5` modifier on a shaped `0.9` score produces `0.45`, but the curve already lost information. |
 | **Impact** | Trait effects are amplified non-linearly. Pacifist trait (0.3 modifier) on high-score actions becomes nearly zero. |
 | **Fix** | Apply trait modifier to `raw` score before curve: `shaped = curve.evaluate(raw * modifier)`. |
-| **Status** | PENDING |
+| **Status** | **FIXED — v1.2.0** · Modifier now applied to `raw` before curve. Functionally equivalent for default `LinearCurve`; semantically correct for `QuadraticCurve`/`SigmoidCurve`. |
 
 ---
 
@@ -116,6 +116,28 @@
 | **Issue** | Lines 131-134 call `ItemIds.FOOD`, `ItemIds.WATER`, etc. inside `log_npc_tick()`. The fallback dummy class (lines 214-215) defines attributes as semicolon-separated string `"food"; "water"` which is invalid Python syntax — should be separate assignments. |
 | **Impact** | If `npc_sim.npc.inventory` fails to import, logger crashes with `AttributeError`. |
 | **Fix** | Fix dummy class: `FOOD = "food"; WATER = "water"` → separate lines or proper class body. |
+| **Status** | PENDING |
+
+---
+
+### #21 — Action lock broken by `is_valid()` during minimum duration → rapid sleep/work cycling
+| | |
+|---|---|
+| **Location** | `npc_sim/decisions/decision_system.py:55-56, 69-70` |
+| **Issue** | While serving a lock's `min_duration`, the system checks `is_valid()` on the locked action (lines 55 and 69). If False, the lock is immediately cleared and normal evaluation runs. `SleepAction.is_valid()` requires `energy_norm < 0.35`; the restore rate (`0.15 × max_energy × delta_time`) crosses this threshold in **1-3 ticks**, so the sleep lock breaks almost immediately. The NPC then evaluates freely, Work wins, drains energy back below the threshold, and the cycle repeats every 1-5 ticks. **CSV evidence:** Scholar oscillates Sleep↔Work at tick 271-277 (sim_hour 6.45-6.46), cycling ~57 times per sim-day. |
+| **Impact** | Core simulation behavioral failure. NPCs never sustain work or sleep — they flicker every few ticks instead of serving meaningful shifts. Makes the simulation unusable for behavior research. |
+| **Fix** | Remove the `is_valid()` check inside the `min_duration` phase (lines 55-56 and 69-70). During minimum duration only `hard_interrupt` should be able to break the lock. `is_valid()` and `exit_condition` should only apply after `min_duration` has elapsed. |
+| **Status** | PENDING |
+
+---
+
+### #22 — `WorkAction` energy drain rate 65× too high for 1440-second sim-day
+| | |
+|---|---|
+| **Location** | `npc_sim/decisions/actions/builtin.py:518` |
+| **Issue** | `consume_energy(5.0 * ctx.delta_time)` drains 5.0 units/sim-second. With `delta_time = 0.1` sim-sec/tick this is 0.5 units/tick. For an NPC with `max_energy ≈ 90`, energy is exhausted (`energy_norm < 0.35`) in **≈ 18 sim-minutes** (108 ticks). An 8-hour work shift in a 1440-second day requires only ≈ 0.077 units/sim-second above the base `energy_decay_rate` of 0.073. The configured value is 65× larger. Base decay alone (`energy_decay_rate = 0.073`) already drains energy over ≈ 20 sim-hours; the action rate should be a modest multiplier (e.g. 2–3×), not 69×. |
+| **Impact** | Even if bug #21 is fixed (locks hold), NPCs exhaust themselves in 18 sim-minutes per shift. Combined with #21, WorkAction is the engine of the rapid cycling loop. |
+| **Fix** | Replace `5.0` with a value that drains ≈ 60-70% of max_energy over an 8-hour shift (480 sim-sec): `consume_energy(0.10 * ctx.delta_time)` (≈ 1.4× the base decay, net drain ≈ 0.173 units/sim-sec → 83 units over 480 sec ≈ 92% for max_energy=90, or tune as needed). |
 | **Status** | PENDING |
 
 ---
@@ -140,7 +162,7 @@
 | **Issue** | `is_valid()` caps at 5 items (line 226), but `execute()` just adds without checking. NPC could accumulate beyond cap over multiple ticks if `is_valid()` threshold is met but cap not enforced. |
 | **Impact** | Inventory exploits — NPCs can hoard beyond intended limits. |
 | **Fix** | Add cap check in `execute()`: `if inv.get_amount(ItemIds.FOOD) >= 5: return`. |
-| **Status** | PENDING |
+| **Status** | **FIXED — v1.2.0** · Added per-resource cap enforcement in `execute()` matching `is_valid()` limit of 5 items. Correctly falls back to gathering the other resource if one is full. |
 
 ---
 
@@ -162,7 +184,7 @@
 | **Issue** | Sequential `find()` calls for each stop artifact means overlapping artifacts could leave residuals. Example: `<|eot_id|>` contains `<|eot` — first strip removes long form, second strip might find false positive. |
 | **Impact** | Malformed JSON passed to parser, causing parse failures and fallbacks. |
 | **Fix** | Use regex: `re.sub(r'<\|?(eot_id|end_of_text|eot)\|?>', '', content)`. |
-| **Status** | PENDING |
+| **Status** | **FIXED — v1.2.0** · Replaced sequential `find()` loop with single `re.sub()` regex pass covering all EOS artifacts atomically. |
 
 ---
 
@@ -173,6 +195,17 @@
 | **Issue** | `efficiency` variable computed and logged but never affects `WorkAction.execute()` output. Resource generation should scale with energy. |
 | **Impact** | Work action produces same output regardless of NPC energy level. |
 | **Fix** | Pass efficiency to WorkAction or compute resource generation in SimulationManager. |
+| **Status** | PENDING |
+
+---
+
+### #23 — `SleepAction` restore rate and lock `min_duration` values miscalibrated for 1440-second day
+| | |
+|---|---|
+| **Location** | `npc_sim/decisions/actions/builtin.py:115` (SleepAction lock), `npc_sim/decisions/actions/builtin.py:133` (restore rate), `npc_sim/decisions/actions/builtin.py:494` (WorkAction lock) |
+| **Issue** | Two separate calibration errors compound each other: **(a) Restore rate too fast:** `SleepAction.execute()` uses `restore = 0.15 * max_energy * delta_time`. For Scholar (`max_energy=90`, `delta_time=0.1`): 13.5 units/sim-second → full recovery in **6.7 sim-seconds** (0.1 sim-minutes). For a realistic 8-hour sleep cycle (480 sim-sec), the rate should be ≈ 0.122 units/sim-sec. Current rate is 110× too fast. **(b) Lock `min_duration` wrong scale:** `SleepAction.min_duration = 3600` sim-seconds = **2.5 sim-days** in a 1440-sec day. `WorkAction.min_duration = 1800` sim-seconds = **1.25 sim-days**. These values are calibrated for an 86400-second (real-world) day. For an 8-hour sleep or work shift in a 1440-sec day: target `min_duration ≈ 480` sim-seconds. Note: currently masked by bug #21 (lock breaks before min_duration matters), but becomes the primary symptom after #21 is fixed. |
+| **Impact** | (a) Even with locks correctly enforced, NPCs fully recover in 7 sim-seconds and the `exit_condition` (`energy_norm ≥ 0.95`) fires immediately, yielding 7-second sleep cycles. (b) If restore rate is fixed without fixing `min_duration`, NPCs sleep for 2.5 sim-days before being allowed to exit. Both issues must be fixed together with bug #22 for a coherent 24-hour lifecycle. |
+| **Fix** | (a) Change restore formula: `restore = (0.122 / max_energy) * max_energy * delta_time` → simplifies to `restore = 0.122 * delta_time` (tune to ≈ 8-hour full recovery). (b) Change both lock durations from `3600` → `480` and `1800` → `480` sim-seconds (adjust as desired for balance). |
 | **Status** | PENDING |
 
 ---
@@ -219,7 +252,7 @@
 | **Issue** | `min_duration_sim_seconds=0.0` means lock expires immediately. NPC flees one tick then re-evaluates. Defeats purpose of action locking for sustained fleeing behavior. |
 | **Impact** | NPCs may freeze or oscillate between flee and other actions during danger. |
 | **Fix** | Set reasonable duration (5-10 seconds) or use distance-based exit condition. |
-| **Status** | PENDING |
+| **Status** | **FIXED — v1.2.0** · Changed `min_duration_sim_seconds` from `0.0` to `8.0`. Exit condition (threat disappears) still provides early termination. |
 
 ---
 
@@ -239,22 +272,22 @@
 | Category | Count |
 |----------|-------|
 | CRITICAL | 5 |
-| HIGH | 5 |
-| MEDIUM | 5 |
+| HIGH | 7 |
+| MEDIUM | 6 |
 | LOW | 5 |
-| **Total** | **20** |
+| **Total** | **23** |
 
 ### By Module
 
 | Module | Issues |
 |--------|--------|
 | `llm/` | 8 (#1, #2, #5, #6, #11, #14, #16, #18) |
-| `decisions/` | 5 (#4, #7, #12, #13, #19) |
+| `decisions/` | 8 (#4, #7, #12, #13, #19, #21, #22, #23) |
 | `simulation/` | 2 (#3, #15) |
 | `npc/` | 1 (#8) |
 | `diagnostics/` | 1 (#10) |
 | `core/` | 1 (#17) |
-| Cross-module | 1 (#9, #20) |
+| Cross-module | 2 (#9, #20) |
 
 ---
 

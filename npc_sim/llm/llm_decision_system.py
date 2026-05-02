@@ -55,6 +55,7 @@ class LLMDecisionSystem:
         self._last_hp: float = -1.0
         self._pending: bool = False        # LLM call in flight
         self._pending_lock = threading.Lock()
+        self._tick_counter: int = 0
 
         # Last LLM result (applied next tick if arrived)
         self._pending_response: LLMResponse | None = None
@@ -72,6 +73,7 @@ class LLMDecisionSystem:
         self.last_emotion: str | None = None
         self.last_score: float = 0.0
         self.llm_active: bool = False
+        self._focused: bool = False
 
     # ── Helper: is this a focused NPC? ────────────────────────────────────────
     @property
@@ -81,8 +83,6 @@ class LLMDecisionSystem:
     @focused.setter
     def focused(self, v: bool):
         self._focused = v
-
-    _focused: bool = False
 
     # ── Main tick ─────────────────────────────────────────────────────────────
 

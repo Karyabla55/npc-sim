@@ -10,6 +10,7 @@ Architecture:
 
 from __future__ import annotations
 import json
+import re
 import time
 import urllib.request
 import urllib.error
@@ -156,10 +157,7 @@ class OllamaBackend(ILLMBackend):
                latency: float) -> LLMResponse:
         """Parse model output JSON → LLMResponse. Raises ValueError on schema error."""
         # Strip any EOS token artifacts that leaked past Ollama's stop list
-        for stop_artifact in ["<|eot_id|>", "<|end_of_text|>", "<|eot", "espo"]:
-            idx = content.find(stop_artifact)
-            if idx != -1:
-                content = content[:idx]
+        content = re.sub(r'<\|eot_id\|>|<\|end_of_text\|>|<\|eot\b|espo\w*', '', content)
         content = content.strip()
 
         data = json.loads(content)

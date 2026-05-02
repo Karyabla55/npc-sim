@@ -50,6 +50,26 @@ class NPCPsychology:
         self.anger = _clamp(value, 0.0, 1.0)
         self._recalculate_mood()
 
+    # ── Emotion increment helpers ──
+
+    def increase_anger(self, delta: float) -> None:
+        self.set_anger(self.anger + delta)
+
+    def decrease_anger(self, delta: float) -> None:
+        self.set_anger(self.anger - delta)
+
+    def increase_fear(self, delta: float) -> None:
+        self.set_fear(self.fear + delta)
+
+    def decrease_fear(self, delta: float) -> None:
+        self.set_fear(self.fear - delta)
+
+    def increase_happiness(self, delta: float) -> None:
+        self.set_happiness(self.happiness + delta)
+
+    def decrease_happiness(self, delta: float) -> None:
+        self.set_happiness(self.happiness - delta)
+
     # ── Emotion decay ──
 
     def decay_emotions(

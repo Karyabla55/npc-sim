@@ -67,7 +67,7 @@ class LLMRequestQueue:
         self._backend = backend
         self._max_queue = max_queue_size
         self._heap: list[LLMRequest] = []
-        self._heap_lock = threading.Lock()
+        self._heap_lock = threading.Condition()
         self._executor = ThreadPoolExecutor(
             max_workers=max_concurrent,
             thread_name_prefix="llm_worker"
@@ -101,6 +101,7 @@ class LLMRequestQueue:
             heapq.heappush(self._heap, req)
             with self._stats_lock:
                 self._stats["submitted"] += 1
+            self._heap_lock.notify()
         return True
 
     def get_stats(self) -> dict:
@@ -113,17 +114,20 @@ class LLMRequestQueue:
 
     def shutdown(self) -> None:
         self._running = False
+        with self._heap_lock:
+            self._heap_lock.notify_all()
         self._executor.shutdown(wait=False)
 
     # ── Internal ───────────────────────────────────────────────────────────────
 
     def _dispatch_loop(self) -> None:
         while self._running:
-            req = self._pop_highest()
+            with self._heap_lock:
+                while not self._heap and self._running:
+                    self._heap_lock.wait(timeout=0.1)
+                req = heapq.heappop(self._heap) if self._heap else None
             if req is not None:
                 self._executor.submit(self._execute, req)
-            else:
-                time.sleep(0.005)  # 5ms idle poll
 
     def _pop_highest(self) -> Optional[LLMRequest]:
         with self._heap_lock:

@@ -151,8 +151,8 @@ class FleeAction(IAction):
     action_type = "Flee"
 
     def create_lock(self) -> ActionLock:
-        return ActionLock(self.action_id, 0.0, 
-                          lambda ctx: not ctx.has_percept("Threat"), 
+        return ActionLock(self.action_id, 8.0,
+                          lambda ctx: not ctx.has_percept("Threat"),
                           interrupt_allowed=False)
 
     def is_valid(self, ctx: ActionContext) -> bool:
@@ -245,12 +245,26 @@ class GatherAction(IAction):
 
     def execute(self, ctx: ActionContext) -> None:
         v = ctx.self_npc.vitals
+        inv = ctx.self_npc.inventory
+        _CAP = 5
+        food_full = inv.get_amount(ItemIds.FOOD) >= _CAP
+        water_full = inv.get_amount(ItemIds.WATER) >= _CAP
+        if food_full and water_full:
+            return
         if v.hunger >= v.thirst:
-            ctx.self_npc.inventory.add(ItemIds.FOOD, 1)
-            resource = "food"
+            if not food_full:
+                inv.add(ItemIds.FOOD, 1)
+                resource = "food"
+            else:
+                inv.add(ItemIds.WATER, 1)
+                resource = "water"
         else:
-            ctx.self_npc.inventory.add(ItemIds.WATER, 1)
-            resource = "water"
+            if not water_full:
+                inv.add(ItemIds.WATER, 1)
+                resource = "water"
+            else:
+                inv.add(ItemIds.FOOD, 1)
+                resource = "food"
         v.consume_energy(3.0 * ctx.delta_time)
         if ctx.world:
             ctx.world.publish_event(SimEvent(
@@ -619,12 +633,12 @@ class WalkToAction(IAction):
             return 0.0  # Already there
             
         if v.hunger > 0.65 and not inv.has(ItemIds.FOOD):
-            target = WorldMap.get_zone("Market")
-            if target:
-                dist = SimVector3.distance(ctx.self_npc.position, target)
-                if dist > 2.0:
+            market_pos = WorldMap.get_zone("Market")
+            if market_pos is not None:
+                market_dist = SimVector3.distance(ctx.self_npc.position, market_pos)
+                if market_dist > 2.0:
                     return min(1.0, v.hunger * 0.92)  # beats GatherAction's 0.85
-            return min(1.0, v.hunger * 0.85)  # already at market, gather here
+            return min(1.0, v.hunger * 0.85)  # already at market or zone missing
         if v.thirst > 0.65 and not inv.has(ItemIds.WATER):
             return min(1.0, v.thirst * 0.85)
             

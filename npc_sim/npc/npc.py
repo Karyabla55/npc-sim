@@ -92,7 +92,7 @@ class NPC:
         # Death by neglect
         if cfg and cfg.death_by_neglect:
             if self.vitals.hunger >= 1.0 or self.vitals.thirst >= 1.0:
-                self.vitals.apply_damage(10.0 * delta_time)
+                self.vitals.apply_damage(1.0 * delta_time)
 
         # Cross-component: Stress → Anger (Neuroticism-scaled)
         stress_anger = self.vitals.stress * 0.02 * delta_time * self.psychology.neuroticism
