@@ -16,9 +16,8 @@ class MemoryEntry:
         self.recorded_at = recorded_at
 
     def decay(self, rate: float) -> None:
-        sign = 1.0 if self.emotional_weight >= 0 else -1.0
-        mag = max(0.0, min(abs(self.emotional_weight) - rate, 1.0))
-        self.emotional_weight = sign * mag
+        factor = max(0.0, 1.0 - rate)
+        self.emotional_weight = max(-1.0, min(self.emotional_weight * factor, 1.0))
 
     def __repr__(self) -> str:
         return f"[Mem] {self.event.event_type} EW:{self.emotional_weight:+.2f} @t={self.recorded_at:.1f}"

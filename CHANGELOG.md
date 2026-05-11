@@ -23,6 +23,16 @@ strategy: invariant tests + per-fix 6h smoke + per-phase 30 sim-day milestone.
   exactly 100 instead of growing linearly. Covered by
   `tests/test_inventory_cap.py` (5 cases).
 
+- **A5 — Memory emotional_weight collapsed to zero** (`npc_sim/npc/memory.py`):
+  `MemoryEntry.decay()` used additive subtraction: every tick subtracted
+  `rate` from `|weight|`, clamping to zero. After ~200 ticks at the default
+  rate, every memory's weight was exactly `0.0` and `get_most_salient()`
+  couldn't distinguish a once-traumatic event from a mundane one. Switched
+  to multiplicative decay (`weight *= 1 - rate`) — magnitudes shrink
+  exponentially toward zero but preserve relative ordering forever. Verified:
+  100k decay ticks remain finite, in-range, and sign-preserving.
+  Covered by `tests/test_memory_decay.py` (5 cases).
+
 - **A4 — FactionRegistry stale dispositions** (`npc_sim/simulation/faction_registry.py`):
   `tick_decay()` cleanup threshold was `1e-6`. Floating-point rounding
   during multiplicative decay would freeze values slightly above that, so
