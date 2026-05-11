@@ -23,6 +23,16 @@ strategy: invariant tests + per-fix 6h smoke + per-phase 30 sim-day milestone.
   exactly 100 instead of growing linearly. Covered by
   `tests/test_inventory_cap.py` (5 cases).
 
+- **A2 — BeliefSystem dict unbounded growth** (`npc_sim/npc/beliefs.py`):
+  `BeliefSystem._nodes` grew indefinitely; gossip propagation in
+  `SocializeAction` created new nodes on every interaction. Over years
+  of simulation, RAM would balloon and iteration would slow. Added
+  `max_nodes=200` LRU cap and `prune_threshold=0.05` confidence floor:
+  `decay_all()` now removes nodes whose confidence falls below the
+  threshold; `get_or_create()` evicts the lowest-confidence node (tie-break:
+  oldest `last_updated`) when the cap is reached. Covered by
+  `tests/test_belief_eviction.py` (4 cases).
+
 ---
 
 ## [1.4.0] – 2026-05-11

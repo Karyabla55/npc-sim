@@ -30,15 +30,26 @@ class BeliefNode:
 class BeliefSystem:
     """Manages all beliefs for an NPC."""
 
-    def __init__(self):
+    def __init__(self, max_nodes: int = 200, prune_threshold: float = 0.05):
         self._nodes: dict[str, BeliefNode] = {}
+        self._max_nodes = max_nodes
+        self._prune_threshold = prune_threshold
 
     @property
     def nodes(self) -> dict[str, BeliefNode]:
         return self._nodes
 
+    def _evict_one(self) -> None:
+        if not self._nodes:
+            return
+        victim = min(self._nodes.values(),
+                     key=lambda n: (n.confidence, n.last_updated))
+        del self._nodes[victim.subject]
+
     def get_or_create(self, subject: str) -> BeliefNode:
         if subject not in self._nodes:
+            if len(self._nodes) >= self._max_nodes:
+                self._evict_one()
             self._nodes[subject] = BeliefNode(subject)
         return self._nodes[subject]
 
@@ -52,6 +63,10 @@ class BeliefSystem:
     def decay_all(self, decay_rate: float = 0.01) -> None:
         for node in self._nodes.values():
             node.decay(decay_rate)
+        to_remove = [k for k, n in self._nodes.items()
+                     if n.confidence < self._prune_threshold]
+        for k in to_remove:
+            del self._nodes[k]
 
     def __repr__(self) -> str:
         return f"[BeliefSystem] {len(self._nodes)} belief node(s)"
