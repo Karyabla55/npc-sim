@@ -5,6 +5,26 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — v1.5.0 (long-run stability + integration + polish)
+
+Risk-first triage of the long-run stability audit (Phase A), then integration
+gap closure (Phase B), then 5 pending tracker bugs (Phase C). Validation
+strategy: invariant tests + per-fix 6h smoke + per-phase 30 sim-day milestone.
+
+### Fixed
+
+- **A1 — Inventory unbounded growth** (`npc_sim/npc/inventory.py`):
+  `NPCInventory.add()` had no per-stack cap; `WorkAction` produced GRAIN/GOLD/
+  TOOLS every tick, so a single NPC's gold stack would grow without bound over
+  long runs (315M+ ticks/year). Added `stack_cap=100` parameter; existing-stack
+  additions are clamped, initial amounts are clamped, and the method returns
+  `False` when the stack is full so the producer falls through to another
+  action. 6h diagnostic (seed=42, 5 archetypes) confirms gold saturating at
+  exactly 100 instead of growing linearly. Covered by
+  `tests/test_inventory_cap.py` (5 cases).
+
+---
+
 ## [1.4.0] – 2026-05-11
 
 Psychology stability pass + Memory/Beliefs/Goals integration with the Utility AI

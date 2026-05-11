@@ -60,14 +60,17 @@ class NPCInventory:
     def has(self, item_id: str, amount: int = 1) -> bool:
         return self.get_amount(item_id) >= amount
 
-    def add(self, item_id: str, amount: int = 1) -> bool:
+    def add(self, item_id: str, amount: int = 1, stack_cap: int = 100) -> bool:
+        amount = max(0, amount)
         for stack in self._stacks:
             if stack.item_id == item_id:
-                stack.add(amount)
+                if stack.amount >= stack_cap:
+                    return False
+                stack.amount = min(stack_cap, stack.amount + amount)
                 return True
         if len(self._stacks) >= self._capacity:
             return False
-        self._stacks.append(ItemStack(item_id, amount))
+        self._stacks.append(ItemStack(item_id, min(stack_cap, amount)))
         return True
 
     def remove(self, item_id: str, amount: int = 1) -> bool:
