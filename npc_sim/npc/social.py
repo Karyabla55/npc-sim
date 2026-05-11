@@ -67,20 +67,36 @@ class Relation:
                 f"T:{self.trust:.2f} A:{self.affinity:.2f} R:{self.respect:.2f} ({self.relation_type})")
 
 
+def _relation_magnitude(rel: Relation) -> float:
+    return max(abs(rel.trust), abs(rel.affinity), abs(rel.respect))
+
+
 class NPCSocial:
     """Manages social relationships, reputation, and group standing for an NPC."""
 
-    def __init__(self, initial_reputation: float = 0.5, initial_group_standing: float = 0.5):
+    def __init__(self, initial_reputation: float = 0.5, initial_group_standing: float = 0.5,
+                 max_relations: int = 200, prune_threshold: float = 0.05):
         self._relations: dict[str, Relation] = {}
         self.reputation = _clamp(initial_reputation, 0.0, 1.0)
         self.group_standing = _clamp(initial_group_standing, 0.0, 1.0)
+        self._max_relations = max_relations
+        self._prune_threshold = prune_threshold
 
     @property
     def relations(self) -> dict[str, Relation]:
         return self._relations
 
+    def _evict_one(self) -> None:
+        if not self._relations:
+            return
+        victim = min(self._relations.values(),
+                     key=lambda r: (_relation_magnitude(r), r.last_interaction_time))
+        del self._relations[victim.target_id]
+
     def get_or_create_relation(self, owner_id: str, target_id: str) -> Relation:
         if target_id not in self._relations:
+            if len(self._relations) >= self._max_relations:
+                self._evict_one()
             self._relations[target_id] = Relation(owner_id, target_id)
         return self._relations[target_id]
 
@@ -99,6 +115,10 @@ class NPCSocial:
     def tick_decay(self, delta_time: float, decay_rate: float = 0.00005) -> None:
         for rel in self._relations.values():
             rel.decay_over_time(delta_time, decay_rate)
+        to_remove = [tid for tid, r in self._relations.items()
+                     if _relation_magnitude(r) < self._prune_threshold]
+        for tid in to_remove:
+            del self._relations[tid]
 
     def to_dict(self) -> dict:
         return {

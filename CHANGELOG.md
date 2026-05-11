@@ -23,6 +23,16 @@ strategy: invariant tests + per-fix 6h smoke + per-phase 30 sim-day milestone.
   exactly 100 instead of growing linearly. Covered by
   `tests/test_inventory_cap.py` (5 cases).
 
+- **A3 — NPCSocial.Relation dict unbounded growth** (`npc_sim/npc/social.py`):
+  `NPCSocial._relations` grew without eviction. Every novel NPC encounter
+  created a new `Relation` even when it stayed near zero forever; over years
+  the dict would hold thousands of effectively-dead relationships. Added
+  the same shape as A2: `max_relations=200` LRU cap + `prune_threshold=0.05`
+  applied to `max(|trust|, |affinity|, |respect|)`. `tick_decay()` prunes
+  faded relations; `get_or_create_relation()` evicts the lowest-magnitude
+  (oldest tie-break) entry when at cap. Covered by
+  `tests/test_relation_eviction.py` (4 cases).
+
 - **A2 — BeliefSystem dict unbounded growth** (`npc_sim/npc/beliefs.py`):
   `BeliefSystem._nodes` grew indefinitely; gossip propagation in
   `SocializeAction` created new nodes on every interaction. Over years
