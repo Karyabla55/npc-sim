@@ -23,6 +23,16 @@ strategy: invariant tests + per-fix 6h smoke + per-phase 30 sim-day milestone.
   exactly 100 instead of growing linearly. Covered by
   `tests/test_inventory_cap.py` (5 cases).
 
+- **A6 — Unbounded CSV log growth** (`npc_sim/diagnostics/sim_logger.py`):
+  `sim_full.csv` was opened once and appended forever — at 10 NPCs × 1 tick/s
+  that's ~315M rows/year, gigabytes of disk and slow append. Added
+  `rotate_every_rows=1_000_000` (default) to `SimLogger.__init__`: when the
+  row counter crosses the threshold, the active file is closed and renamed
+  to `sim_full.NNNN.csv` (sequential suffix), and a fresh `sim_full.csv` is
+  opened with a new header. The notebook's "Re-run Cell 2" workflow keeps
+  working since the active log path is unchanged. Covered by
+  `tests/test_logger_rotation.py` (4 cases).
+
 - **A5 — Memory emotional_weight collapsed to zero** (`npc_sim/npc/memory.py`):
   `MemoryEntry.decay()` used additive subtraction: every tick subtracted
   `rate` from `|weight|`, clamping to zero. After ~200 ticks at the default

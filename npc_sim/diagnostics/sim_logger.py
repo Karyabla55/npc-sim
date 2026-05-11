@@ -43,10 +43,13 @@ class SimLogger:
     """
 
     def __init__(self, log_dir: str = "logs", enabled: bool = True,
-                 flush_every: int = 500):
+                 flush_every: int = 500, rotate_every_rows: int = 1_000_000):
         self.enabled = enabled
         self._flush_every = flush_every
+        self._rotate_every_rows = rotate_every_rows
+        self._rotation_count = 0
         self._row_count = 0
+        self._log_dir = log_dir
         self._log_path = ""
         self._writer = None
         self._file = None
@@ -56,11 +59,28 @@ class SimLogger:
 
         os.makedirs(log_dir, exist_ok=True)
         self._log_path = os.path.join(log_dir, "sim_full.csv")
+        self._open_writer()
+
+    def _open_writer(self) -> None:
         self._file = open(self._log_path, "w", newline="", encoding="utf-8")
         self._writer = csv.DictWriter(self._file, fieldnames=COLUMNS,
                                       extrasaction="ignore")
         self._writer.writeheader()
         self._file.flush()
+
+    def _rotate(self) -> None:
+        if self._file is None:
+            return
+        self._file.flush()
+        self._file.close()
+        self._rotation_count += 1
+        archive = os.path.join(
+            self._log_dir, f"sim_full.{self._rotation_count:04d}.csv"
+        )
+        if os.path.exists(archive):
+            os.remove(archive)
+        os.rename(self._log_path, archive)
+        self._open_writer()
 
     # ── Public API ──────────────────────────────────────────────────────────────
 
@@ -161,6 +181,8 @@ class SimLogger:
         self._row_count += 1
         if self._row_count % self._flush_every == 0:
             self._file.flush()
+        if self._rotate_every_rows > 0 and self._row_count % self._rotate_every_rows == 0:
+            self._rotate()
 
     def note_vital_threshold(self, npc_id: str, vital: str,
                               value: float, direction: str,
