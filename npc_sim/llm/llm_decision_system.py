@@ -215,6 +215,9 @@ class LLMDecisionSystem:
                     self.last_reasoning = resp.reasoning or ""
                     self.last_dialogue = resp.dialogue
                     self.last_emotion = resp.emotion
+                    # Hand off the LLM-authored line to the NPC so social actions
+                    # can carry it to the target's memory (G4).
+                    ctx.self_npc.pending_dialogue = resp.dialogue
                     return action
         return None
 

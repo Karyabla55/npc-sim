@@ -63,6 +63,72 @@
 
 ---
 
+### #24 — Death-by-neglect: 80% NPC mortality within 2 sim-days despite v1.3.0 fixes
+| | |
+|---|---|
+| **Location** | `npc_sim/decisions/decision_system.py` (action lock policy) + `npc_sim/decisions/utility_evaluator.py` (vital-weight scoring) + `npc_sim/decisions/actions/builtin.py` (`WorkAction`, `SleepAction`, `PrayAction`) |
+| **Issue** | Diagnostic CSV (`logs/sim_full.csv`, 24,035 rows, 10 NPCs, 2 sim-days) shows 8/10 NPCs dead by `sim_hour 22.63` of `sim_day 1`, all from `health=0` driven by `thirst=1.0` (5 deaths) or `hunger=1.0` (3 deaths). Trace of one Farmer (npc_24107e49): worked for **1640 consecutive ticks** (≈164 sim-seconds, sim_hour 0 → 23.61) during which thirst rose 0.10 → 0.85 with **zero Drink actions**, then ran one Eat (1 tick) + one Drink (1 tick), then Slept for 11 ticks (thirst rose 0.38 → 0.83), then died during a 5-tick WalkTo as thirst hit 1.0. Multiple NPCs (Scholar, Merchant, Priest, Guard) follow the same pattern: a 1635-1640-tick continuous Work or Pray segment, followed by death within ~10 sim-minutes. The action lock from #21 fix correctly holds the action, but no `hard_interrupt` exists for `thirst >= 0.8` or `hunger >= 0.8`, so vitals saturate while NPC is locked into Work/Pray/Sleep. Of 949 critical-state ticks (`thirst>0.8 OR hunger>0.8`), NPCs Drink only 16 times (1.7%) and Eat 53 times (5.6%); they Sleep 378 times (40%), Gather 268 (28%), Pray 101 (11%). |
+| **Impact** | Simulation produces no living NPCs after 2 sim-days — unusable for any behavior/narrative research. Bugs #21–#23 fixed lock-stickiness and shift duration but exposed this deeper issue: locks have no escape valve for life-threatening vitals. |
+| **Fix** | Add `hard_interrupt` predicate to long-duration actions (Work, Sleep, Pray) that breaks the lock when `thirst >= 0.85` or `hunger >= 0.85` or `hp <= 0.25 * hp_max`. Implementation: extend `ActionLock` with an `interrupt_predicate: Callable[[ActionContext], bool]` field; `decision_system.py` evaluates it each tick during the `min_duration` window and breaks the lock if True. Alternatively, raise vital weights in `UtilityEvaluator` so Drink/Eat outscore Sleep/Pray when critical (less robust — locks would still need to yield). |
+| **Status** | **FIXED — v1.3.1** · Added `interrupt_predicate=_vital_interrupt` to `WorkAction`, `SleepAction`, `PrayAction` locks. Predicate breaks the lock when `thirst≥0.85 or hunger≥0.85 or health≤0.25*max_health`. Logic added in `decision_system.py` min_duration window (before execute). Also extended global `hard_interrupt` to include `health ≤ 0.25*max_health`. |
+
+---
+
+### #25 — Sleep chosen 40% of the time during critical thirst/hunger states
+| | |
+|---|---|
+| **Location** | `npc_sim/decisions/actions/builtin.py:SleepAction.evaluate()` + `npc_sim/decisions/utility_evaluator.py` |
+| **Issue** | When `thirst > 0.8 OR hunger > 0.8` (949 critical ticks across all NPCs), Sleep is the most-chosen action: 378/949 = 40%. Drink fires 16 times (1.7%), Eat 53 (5.6%). The longest Sleep segment is **721 ticks** (Farmer, sim_hour 1707→2428) during which thirst rose from 0.0015 to 0.6975 — the NPC slept through near-critical dehydration. Sleep utility apparently scores high on low energy without sufficient downweighting from rising thirst/hunger. |
+| **Impact** | NPCs sleep through dehydration/starvation, contributing directly to the mass-mortality pattern in #24. |
+| **Fix** | In `SleepAction.evaluate()`, multiply the score by `(1 - max(thirst, hunger))` or apply a hard cap: `if thirst > 0.7 or hunger > 0.7: score *= 0.2`. Alternatively, use `UtilityEvaluator`-level vital-priority gating (Maslow-style hierarchy: thirst/hunger needs always outrank rest/spirit needs). |
+| **Status** | **FIXED — v1.3.1** · `SleepAction.evaluate()` now returns `base_score * (1 - max(thirst, hunger))`. Score collapses to near-zero as vitals become critical. |
+
+---
+
+### #27 — Stress accumulates monotonically toward 1.0
+| | |
+|---|---|
+| **Location** | `npc_sim/decisions/actions/builtin.py:204, 369` (`FleeAction`, `AttackAction` execute); `npc_sim/npc/npc.py:120-140` (`witness_event`); `npc_sim/npc/npc.py:97-103` (`tick`) |
+| **Issue** | Four compounding problems drove stress toward 1.0 within ~25 sim-minutes and held it there: (a) `FleeAction` and `AttackAction` added flat `+0.05` / `+0.12` to stress on every tick of the action lock; with `delta_time=0.1` and 8–10s locks this stacks to ~1.0 per encounter. (b) `witness_event()` used `abs(impact)` so every positive event (Eat, Trade, Work success) also pushed stress up while simultaneously raising happiness. (c) `NPC.tick()` had no baseline stress recovery — only specific actions (sleep, pray, socialize) reduced it. (d) `SocializeAction` stress relief was not `delta_time` scaled, so a long socialize lock could crater stress to 0 in one chain. |
+| **Impact** | Diagnostic mean stress 0.745, with 57.7 % of all rows at stress > 0.9. NPCs were perma-anxious regardless of context, which corrupted Pray scoring, anger spillover (`stress → anger` term in `npc.py:98`), and emotion-driven action selection downstream. |
+| **Fix** | (a) Scale stress deltas in `FleeAction.execute()` and `AttackAction.execute()` by `ctx.delta_time`. (b) Only feed stress in `witness_event()` when `sim_event.impact < 0`. (c) Add a low-rate `baseline_recovery` term in `NPC.tick()` scaled inversely with neuroticism. (d) Scale `SocializeAction` stress relief by `ctx.delta_time`. Add small `delta_time`-scaled relief in `EatAction`, `DrinkAction`, `HealAction`. |
+| **Status** | **FIXED — v1.4.0** · Mean stress 0.745 → 0.532; stress > 0.9 share 57.7 % → 31.3 % in the regression run. |
+
+---
+
+### #28 — Anger and Happiness can both reach 1.0 simultaneously
+| | |
+|---|---|
+| **Location** | `npc_sim/npc/psychology.py:41-51` (setters), `npc_sim/npc/psychology.py:101-121` (`_recalculate_mood`) |
+| **Issue** | `set_anger()` and `set_happiness()` clamped each value independently and the `_recalculate_mood()` if-elif chain only surfaced one label (`Furious` priority), hiding the contradictory internal state. CSV logs showed cells where `emotion_anger ≈ 1.0` co-existed with happiness gains from earlier ticks, producing psychologically incoherent NPCs. |
+| **Impact** | LLM payloads exposed both emotions to the model with no antagonism, producing dialogue/decisions that contradicted the visible mood. Mood label looked correct but the underlying state did not match what trait coherence guards reasoned about. |
+| **Fix** | Implement cross-inhibition: when one emotion increases, scale the other by `(1 - delta * _CROSS_INHIBITION)` with `_CROSS_INHIBITION = 0.5`. Add a defensive `"Conflicted"` mood label for the rare case both still exceed 0.6 after inhibition. |
+| **Status** | **FIXED — v1.4.0** · 0 / 18,000 rows in the regression run satisfy `anger ≥ 0.7 AND happiness ≥ 0.7`. |
+
+---
+
+### #29 — Memory, Beliefs, and Goals not consumed by Utility AI
+| | |
+|---|---|
+| **Location** | `npc_sim/decisions/actions/builtin.py` (all `evaluate()` and most `execute()`), `npc_sim/decisions/action_context.py`, `npc_sim/llm/llm_decision_system.py` |
+| **Issue** | `BeliefSystem`, `NPCMemory`, and `NPCGoals` correctly stored data but the Utility AI never read them. NPCs that had been attacked at Market still scored Market the same in `WalkToAction`; NPCs with strong negative beliefs about a hostile NPC didn't get an attack bias; the `FIND_FOOD` / `FIND_WATER` / `REST` goals raised by `refresh_need_goals()` had no effect on action scoring. `SocializeAction.execute()` only mutated relation scalars — the dialogue line generated by the LLM was never delivered to the listener, and the speaker's beliefs never propagated. |
+| **Impact** | Data structures existed but did not drive emergent behavior. NPCs never "learned" to avoid places or people that had hurt them; gossip / information transfer was impossible; the LLM produced dialogue strings the rest of the system threw away. |
+| **Fix** | Roadmap tasks G1–G6 from `docs/nextsteps.md`: `ActionContext.belief_score()` + `goal_bonus()` helpers; `WalkToAction` zone bias from memory+belief; `AttackAction` belief valence; `SocializeAction` dialogue handoff to listener memory + trust-gated belief propagation; goal bonus threaded through every action's `evaluate()`. `LLMDecisionSystem._apply_pending()` now sets `NPC.pending_dialogue` for the speaker to consume. |
+| **Status** | **FIXED (partial) — v1.4.0** · G1–G6 complete. G7 (LLM reasoning → memory) and G8 (target_context payload for social actions) deferred to v1.5. |
+
+---
+
+### #26 — Pray saturates Priest archetype (~95% of existence)
+| | |
+|---|---|
+| **Location** | `npc_sim/decisions/actions/builtin.py:PrayAction.evaluate()` + Priest trait modifiers (likely `Devout`) |
+| **Issue** | Priest archetype emits **4104 of 5848 total Pray actions (70%)**. Two Priest Pray segments are 1635 and 1638 ticks long (~164 sim-seconds = 2.7 sim-hours continuous prayer). Across the simulation, Priest spends ~95% of all ticks praying. During these segments, thirst rises from ~0.18 to ~0.83 with no Drink action. Pray fires 5848 times total vs. Drink 423 — Pray is **14× more frequent than Drink** despite Drink being a survival need and Pray being a spiritual one. |
+| **Impact** | Priest archetype is non-functional for behavior research — they pray themselves to death without varied behavior. Pray dominance also pulls non-Priests (567 Guard, 603 Merchant, 573 Scholar Pray actions) away from survival actions. |
+| **Fix** | (a) Cap `Devout` trait modifier on Pray score (currently appears unbounded). (b) Add piety-saturation: Pray score should decay after consecutive uses (similar to diminishing returns on social actions). (c) Add an `exit_condition` to `PrayAction` lock that fires when `thirst > 0.6 OR hunger > 0.6`. (d) Reduce default Pray base score so it doesn't outrank Drink/Eat at moderate spiritual-need levels. |
+| **Status** | **FIXED — v1.3.1** · (a) `devout_bonus` capped `0.4→0.2`. (b) `evaluate()` applies `vital_penalty = 1.0 - max(thirst, hunger)` multiplier. (c) `exit_condition` now includes `thirst > 0.6 or hunger > 0.6` in addition to `stress < 0.2`. (d) `interrupt_predicate=_vital_interrupt` added to lock for hard break at 0.85 threshold. |
+
+---
+
 ## HIGH (Fix Before Next Release)
 
 ### #6 — `_should_call_llm()` ignores interrupt parameter
@@ -271,23 +337,53 @@
 
 | Category | Count |
 |----------|-------|
-| CRITICAL | 5 |
-| HIGH | 7 |
+| CRITICAL | 9 |
+| HIGH | 9 |
 | MEDIUM | 6 |
 | LOW | 5 |
-| **Total** | **23** |
+| **Total** | **29** |
 
 ### By Module
 
 | Module | Issues |
 |--------|--------|
 | `llm/` | 8 (#1, #2, #5, #6, #11, #14, #16, #18) |
-| `decisions/` | 8 (#4, #7, #12, #13, #19, #21, #22, #23) |
+| `decisions/` | 12 (#4, #7, #12, #13, #19, #21, #22, #23, #24, #25, #26, #29) |
 | `simulation/` | 2 (#3, #15) |
-| `npc/` | 1 (#8) |
+| `npc/` | 3 (#8, #27, #28) |
 | `diagnostics/` | 1 (#10) |
 | `core/` | 1 (#17) |
 | Cross-module | 2 (#9, #20) |
+
+### v1.3.0 Diagnostic Findings (2026-05-02)
+
+Bugs #24–#26 discovered via `notebooks/log_analysis.ipynb` analysis of `logs/sim_full.csv` (24,035 rows, 10 NPCs, 2 sim-days):
+- **80% mortality** (8/10 NPCs dead by sim_day 1, all `health=0` from thirst/hunger saturation)
+- Longest Work segment: **1640 ticks** (Farmer) with no Drink action despite thirst rising 0.10 → 0.85
+- Longest Sleep segment: **721 ticks** (Farmer) with thirst rising 0.00 → 0.70
+- Longest Pray segment: **1638 ticks** (Priest) with thirst rising 0.18 → 0.78
+- **Of 949 critical-vital ticks**: Sleep 40%, Gather 28%, Pray 11%, Eat 5.6%, Drink 1.7%
+- Common root cause: action locks (v1.3.0 #21 fix) hold without vital-driven `hard_interrupt`
+
+### v1.3.1 Diagnostic Results (2026-05-11)
+
+Bugs #24–#26 fixed; validated via 144,010-row CSV (10 NPCs, 24 sim-hours, seed=42):
+- **0% mortality** (10/10 NPCs alive at end of sim-day)
+- **Critical vital ticks**: 6,670 / 144,010 (4.6%) — down from 949 absolute but NPCs now survive them
+- **Action dist during critical vitals**: Work 79.9%, Pray 20.0%, Gather 0.1% — Drink/Sleep absent (vitals resolve before saturation)
+- **Priest Pray %**: 46.8% (was ~95%) — vital penalty + exit_condition prevent prayer death spiral
+- **Performance**: percept dict + tag cache + sort cache + CSV flush 500 applied for ~100 NPC scale
+
+### v1.4.0 Diagnostic Results (2026-05-11)
+
+Bugs #27–#29 fixed; validated via 18,000-row CSV (5 archetypes, 6 sim-hours, seed=42):
+- **Mean stress**: 0.745 → 0.532 (-29 %)
+- **Stress > 0.9**: 57.7 % → 31.3 % (cut nearly in half)
+- **Mean anger**: 0.431 → 0.237 (cut in half)
+- **`anger ≥ 0.7 AND happiness ≥ 0.7`**: **0 rows** (cross-inhibition holds)
+- **Mood "Calm" share**: 53 % → 75 %
+- **Conflicted mood**: 0 rows (cross-inhibition keeps the edge case out)
+- **Open issue**: NPCs bias toward `Work` and don't trigger `Eat`/`Drink`/`Socialize` within 6 h; the new stress-relief / belief-propagation pathways are present but rarely exercised. Tracked as action-selection tuning, not a regression.
 
 ---
 

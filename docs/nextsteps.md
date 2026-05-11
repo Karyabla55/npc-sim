@@ -28,9 +28,9 @@ NPC-Sim bir **medeniyet ölçekli yaşayan dünya simülatörü**dür. Hedef:
 | Vitals sistemi | ✅ Çalışıyor | HP, hunger, thirst, energy, stress — tick başına decay |
 | Psychology (Big Five + duygular) | ✅ Çalışıyor | Extraversion, fear, anger, happiness, mood label |
 | Hafıza (ring buffer) | ✅ Çalışıyor | O(1), 50 kapasite, duygusal ağırlık, salient seçimi |
-| Sosyal ilişkiler | ✅ Veri mevcut | Trust/affinity/respect — ama karar almayı ETKİLEMİYOR |
-| İnançlar (BeliefSystem) | ✅ Veri mevcut | Event tabanlı güncellenme — ama karar almayı ETKİLEMİYOR |
-| Hedefler (GoalSystem) | ✅ Veri mevcut | Priority sorted — ama action'lar bağımsız is_valid() kullanıyor |
+| Sosyal ilişkiler | ✅ Veri mevcut | Trust/affinity/respect — SocializeAction'ın gossip yayılımı için trust kullanılıyor (v1.4.0) |
+| İnançlar (BeliefSystem) | ✅ Kısmen entegre (v1.4.0) | WalkTo zone bias + Attack target valence + Socialize gossip yayılımı kullanıyor. Diğer action'lar hâlâ kullanmıyor. |
+| Hedefler (GoalSystem) | ✅ Entegre (v1.4.0) | `ActionContext.goal_bonus()` ile Eat/Drink/Sleep/Heal/Socialize/Trade/Work/Pray/Gather/Flee evaluate skorlarına eklendi |
 | Trait'ler | ✅ Kısmen entegre | 4 action tipini etkiliyor (flee/attack/trade/explore) |
 | Envanter | ✅ Çalışıyor | Slot tabanlı, 10 item tipi |
 | Schedule | ✅ Çalışıyor | Meslek bazlı, tercih eğrileri |
@@ -46,17 +46,22 @@ NPC-Sim bir **medeniyet ölçekli yaşayan dünya simülatörü**dür. Hedef:
 
 ## 3. Temel Eksikler — Yaşayan Dünya İçin
 
-### 3.1 NPC-NPC İletişimi Gerçek Değil
+### 3.1 NPC-NPC İletişimi Gerçek Değil ✅ Kısmen çözüldü (v1.4.0)
 
-**Sorun:** `SocializeAction.execute()` iki NPC'nin `.interact()` metodunu çağırır. Bu trust/affinity günceller ama:
+**Önceki sorun:** `SocializeAction.execute()` iki NPC'nin `.interact()` metodunu çağırır. Bu trust/affinity günceller ama:
 - LLM'in ürettiği `dialogue` karşı NPC'ye ulaşmıyor
 - Konuşulan şey hafızaya yazılmıyor
 - Bilgi (dedikodu, uyarı, haber) karşıya geçmiyor
 - Karşı NPC'nin durumu (ne hissediyor, ne biliyor) LLM'e verilmiyor
 
-**Etki:** NPCler fiziksel olarak sosyalleşiyor ama entelektüel olarak sessiz bir dünya.
+**v1.4.0'da çözülen (G4 + G5):**
+- LLM dialogue artık `NPC.pending_dialogue` üzerinden `SocializeAction.execute()`'a iletiliyor ve target NPC'nin episodic memory'sine `Dialogue` event olarak yazılıyor.
+- Konuşan NPC'nin en yüksek confidence'lı belief'i hedef NPC'ye sönümlü olarak (`valence × 0.7`, `confidence × 0.6`) aktarılıyor (gossip retelling fidelity).
+- Trust kontrolü: `relation.trust < 0.3` ise belief paylaşılmıyor.
 
-**Gerekli:** Diyalog içerik transferi, bilgi yayılımı (gossip chain), hafıza güncelleme.
+**Hâlâ açık (v1.5 hedefleri):**
+- Karşı NPC'nin durumu (mood, known_facts) LLM payload'una eklenmedi (G8 — v1.5'e ertelendi).
+- `information_shared` semantic etiketi (`bandit_sighting`, `market_price` gibi) yapısal değil — şimdilik subject string'i kullanılıyor.
 
 ---
 
@@ -70,19 +75,19 @@ NPC-Sim bir **medeniyet ölçekli yaşayan dünya simülatörü**dür. Hedef:
 
 ---
 
-### 3.3 Goals / Beliefs / Memory Karar Almayı Etkilemiyor
+### 3.3 Goals / Beliefs / Memory Karar Almayı Etkilemiyor ✅ Kısmen çözüldü (v1.4.0)
 
-**Sorun:** Bu üç sistem veriyi _depolar_ ama `UtilityEvaluator` ya da action'lar bunları _okumaz_.
+**Önceki sorun:** Bu üç sistem veriyi _depolar_ ama `UtilityEvaluator` ya da action'lar bunları _okumaz_.
 
-```
-NPC hafızasında "Market'te dövüldüm" kaydı var
-→ WalkToAction hâlâ Market'e gitmeyi öneriyor
-→ Çünkü WalkToAction hafızaya bakmıyor
-```
+**v1.4.0'da çözülen (G1 + G2 + G3 + G6):**
+- `ActionContext.belief_score(subject)` ve `goal_bonus(goal_type)` helper'ları eklendi.
+- `WalkToAction.evaluate()` artık hedef zone için `get_memory_threat_bias` × 0.6 + `belief_score` × 0.4 bias hesaplıyor ve survival walk'larda ±0.15, exploration walk'larda ±0.40 modülasyon yapıyor.
+- `AttackAction.evaluate()` hedef NPC'nin belief valence'ını okur; `≤ -0.3` valence saldırı skoruna `+0.25`, `≥ +0.3` valence ise `-0.40` ekler.
+- Aktif goal'lar (`FindFood`, `FindWater`, `Rest`, `Socialize`, `Trade`, `Work`, `Pray`, `Heal`, `Survive`, `Attack`) ilgili action skoruna `+0.25` katkı sağlıyor.
 
-**Etki:** NPCler yaşadıklarından ders çıkarmıyor. Deneyim boşa gidiyor.
-
-**Gerekli:** Hafıza-bilgi-hedef üçgenini action evaluation'a bağlayan boru hattı.
+**Hâlâ açık (v1.5 hedefleri):**
+- LLM reasoning çıktısı kendi hafızasına yazılmıyor (G7 — v1.5).
+- Diğer action'lar (TradeAction, WorkAction) belief sorgusu yapmıyor — sadece WalkTo ve Attack.
 
 ---
 
@@ -272,24 +277,35 @@ Aynı NPC'nin birden fazla gün boyunca tutarlı kişilik sergilemesi.
 
 ## 5. Geliştirme Yol Haritası
 
-### v1.3 — Entegrasyon (Öneri: 2-3 hafta)
+### v1.4 — Entegrasyon ✅ Tamamlandı (2026-05-11)
 
 **Hedef:** Mevcut veri yapılarını karar almaya bağla. Yeni sistem yazmadan, var olanı konuştur.
 
+| Görev | Dosya | Durum |
+|-------|-------|-------|
+| G1 ✅ | `npc_sim/decisions/action_context.py` | `belief_score(subject)` + `goal_bonus(goal_type)` helper'ları eklendi |
+| G2 ✅ | `npc_sim/decisions/actions/builtin.py` | `WalkToAction.evaluate()` hedef zone için memory_bias + belief_score modülasyonu uyguluyor |
+| G3 ✅ | `npc_sim/decisions/actions/builtin.py` | `AttackAction.evaluate()` hedef belief valence'ına göre +0.25 / -0.40 boost/penalty |
+| G4 ✅ | `npc_sim/decisions/actions/builtin.py` | `SocializeAction.execute()` → LLM dialogue (veya placeholder) target memory'sine `Dialogue` event olarak yazılıyor |
+| G5 ✅ | `npc_sim/decisions/actions/builtin.py` | `SocializeAction.execute()` → en yüksek confidence belief'i target'a sönümlü olarak aktarıyor, trust ≥ 0.3 koşullu |
+| G6 ✅ | `npc_sim/decisions/action_context.py` + `builtin.py` | Tüm survival ve davranış action'larına active goal bonus (+0.25) eklendi |
+| G7 → v1.5 | `npc_sim/llm/llm_decision_system.py` | `reasoning` çıktısı NPC hafızasına yazılmadı — sonraki tura |
+| G8 → v1.5 | `npc_sim/llm/npc_serializer.py` | Sosyal kararlarda hedef NPC `target_context` payload'a eklenmedi — sonraki tura |
+
+**Doğrulama (gerçekleşen):** Diagnostic koşu (6 sim-hours, seed=42, 5 archetypes) sonrası `logs/sim_full.csv` analizi:
+- Stress mean: 0.745 → 0.532 (-29 %)
+- `anger ≥ 0.7 AND happiness ≥ 0.7`: 0 satır
+- Sosyalleşme sonrası `top_memory_desc` "Dialogue" event'ini içeriyor (gözlemsel)
+
+---
+
+### v1.5 — LLM Entegrasyonu (Öneri: 2-3 hafta)
+
 | Görev | Dosya | Açıklama |
 |-------|-------|----------|
-| G1 | `npc_sim/decisions/action_context.py` | `ActionContext`'e `memory_bias(event_type)` ve `belief_score(subject)` helper ekle |
-| G2 | `npc_sim/decisions/actions/builtin.py` | `WalkToAction.evaluate()` hafıza önyargısına göre zone skoru düşür/artır |
-| G3 | `npc_sim/decisions/actions/builtin.py` | `AttackAction.evaluate()` hedef NPC'ye dair inanç valence'ını skora ekle |
-| G4 | `npc_sim/decisions/actions/builtin.py` | `SocializeAction.execute()` → dialogue string'i karşı NPC'ye `witness_event()` ile ilet |
-| G5 | `npc_sim/decisions/actions/builtin.py` | `SocializeAction.execute()` → paylaşılan bilgi (`information_shared`) karşı NPC'nin `beliefs`'ine ekle |
-| G6 | `npc_sim/npc/goals.py` + `builtin.py` | Active goal türü action score'larını etkilesin (`GoalType.FindFood` aktifse EatAction +0.25 bonus) |
 | G7 | `npc_sim/llm/llm_decision_system.py` | `reasoning` sonucu NPC'nin kendi hafızasına `MemoryEntry` olarak ekle |
 | G8 | `npc_sim/llm/npc_serializer.py` | Sosyal kararlar için hedef NPC'nin özetini payload'a ekle (`target_context`) |
-
-**Doğrulama:** `run_diagnostic.py`'a yeni check'ler ekle:
-- Sosyalleşme sonrası karşı NPC'nin belief/memory güncellendiği
-- Hafıza önyargısının WalkTo zone seçimini etkilediği
+| G9 | `npc_sim/llm/llm_backend.py` | `DualLLMBackend` implement et (Bug #16 kapatma) |
 
 ---
 
@@ -448,21 +464,26 @@ scenario_negative_memory = {**scenario_base, "memories": [{"evt": "Betrayal", "d
 ## 10. Öncelik Sırası (Şimdi Ne Yapılmalı)
 
 ```
-Hemen (v1.3):
-  1. G4 + G5: SocializeAction diyalog transferi + belief yayılımı  ← En yüksek etki
-  2. G1 + G2: ActionContext'e memory_bias, WalkTo'ya hafıza etkisi
-  3. G7: LLM reasoning'i NPC hafızasına yaz
-  4. T1: _valid_actions() sağlamlaştır
+✅ Tamamlandı (v1.4.0 — 2026-05-11):
+  1. G1 + G2 + G3: ActionContext belief/memory helper'ları, WalkTo + Attack bias
+  2. G4 + G5: SocializeAction dialogue transferi + belief yayılımı
+  3. G6: Active goal → action skor bonusu
+  4. Psikoloji stabilizasyon: stres ölçeklemesi + anger/happiness cross-inhibition
+
+Hemen (v1.5):
+  1. G7: LLM reasoning'i NPC hafızasına yaz
+  2. G8: target_context payload eklemesi (sosyal kararlar)
+  3. G9: DualLLMBackend implement et (T5/Bug #16)
+  4. Action selection tuning: NPC'lerin Eat/Drink/Socialize'a yönelmesini sağla
 
 Kısa vadeli (v2.0 - 1. adım):
-  5. T5: DualLLMBackend implement et
-  6. D1: ZoneState sistemi (resource miktarı)
-  7. D3: WorldEventSystem (periyodik olaylar)
-  8. D8: GossipSystem
+  5. D1: ZoneState sistemi (resource miktarı)
+  6. D3: WorldEventSystem (periyodik olaylar)
+  7. D8: GossipSystem (G5'in genişletilmiş hali)
 
 Uzun vade (v3.0):
-  9. V1: NPC yaşam döngüsü
-  10. V6: Self-play dataset üretimi
+  8. V1: NPC yaşam döngüsü
+  9. V6: Self-play dataset üretimi
 ```
 
 ---

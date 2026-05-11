@@ -82,6 +82,7 @@ class SimulationManager:
 
         self.tick_count: int = 0
         self._death_logged: set[str] = set()
+        self._sorted_npc_ids: list[str] = []  # cached deterministic order
 
     # ── NPC management ──
 
@@ -98,6 +99,7 @@ class SimulationManager:
             self.action_library, self.evaluator)
 
         self._vital_trackers[npc.identity.npc_id] = VitalThresholdTracker()
+        self._sorted_npc_ids = sorted(n.identity.npc_id for n in self.world.all_npcs)
 
         self.faction_registry.register_faction(npc.identity.faction)
 
@@ -186,8 +188,9 @@ class SimulationManager:
         # 2. Faction decay
         self.faction_registry.tick_decay(sim_delta)
 
-        # 3. Per-NPC loop (deterministic order: sorted by NPC ID)
-        all_npcs = sorted(self.world.all_npcs, key=lambda n: n.identity.npc_id)
+        # 3. Per-NPC loop (deterministic order: pre-sorted cache, rebuilt only on add_npc)
+        all_npcs = [self.world.get_npc_by_id(nid) for nid in self._sorted_npc_ids]
+        all_npcs = [n for n in all_npcs if n is not None]
         new_events: list[dict] = []
 
         for npc in all_npcs:

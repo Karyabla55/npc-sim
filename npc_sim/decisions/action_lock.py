@@ -10,11 +10,13 @@ class ActionLock:
     """Represents a commitment to an action for a duration of time."""
     def __init__(self, action_id: str, min_duration_sim_seconds: float,
                  exit_condition: Callable[[ActionContext], bool],
-                 interrupt_allowed: bool = True):
+                 interrupt_allowed: bool = True,
+                 interrupt_predicate: Callable[[ActionContext], bool] | None = None):
         self.action_id = action_id
         self.min_duration_sim_seconds = min_duration_sim_seconds
         self.exit_condition = exit_condition
         self.interrupt_allowed = interrupt_allowed
+        self.interrupt_predicate = interrupt_predicate
 
     def __repr__(self) -> str:
         return f"[ActionLock] {self.action_id} (min: {self.min_duration_sim_seconds}s)"

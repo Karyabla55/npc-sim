@@ -43,7 +43,7 @@ class SimLogger:
     """
 
     def __init__(self, log_dir: str = "logs", enabled: bool = True,
-                 flush_every: int = 100):
+                 flush_every: int = 500):
         self.enabled = enabled
         self._flush_every = flush_every
         self._row_count = 0

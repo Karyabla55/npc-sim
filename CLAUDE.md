@@ -124,12 +124,12 @@ All randomness flows through `SimRng` (wraps `random.Random` with a seeded const
 
 ### What Exists vs What's Integrated
 
-The project has strong **data structures** but a partial **integration layer**. Key gap: Goals, Beliefs, Memory, and Social Relations are stored correctly but do **not** currently influence Utility AI action scoring. They are only visible to the LLM via `NPCSerializer`.
+The project has strong **data structures** with an **expanding integration layer**. As of v1.4.0, Memory/Beliefs/Goals/Social all influence at least one Utility AI action. Coverage is still partial — see `docs/integration_map.md` for the full data-source → consumer matrix.
 
-- `BeliefSystem` → stored, decayed, but no action reads beliefs
-- `NPCGoals` → stored, but action `is_valid()`/`evaluate()` never queries the goal stack
-- `NPCMemory` → stored, sent to LLM payload (top 3 salient), but Utility AI ignores it
-- `NPCSocial` → stored, but `SocializeAction` doesn't use trust/affinity in scoring
+- `BeliefSystem` → consumed by `WalkToAction` (zone bias) and `AttackAction` (target valence) via `ActionContext.belief_score()`. Other actions still don't read beliefs.
+- `NPCGoals` → consumed by every survival/behaviour action via `ActionContext.goal_bonus()` (+0.25 when the related goal is active).
+- `NPCMemory` → consumed by `WalkToAction` (zone threat bias via `get_memory_threat_bias()`). `SocializeAction.execute()` now writes a `Dialogue` event into the listener's memory, carrying the LLM-authored line.
+- `NPCSocial` → consumed by `SocializeAction.execute()` for trust-gated belief propagation (gossip retelling, attenuated valence/confidence).
 
 ### DualLLMBackend Status
 
@@ -137,15 +137,17 @@ The project has strong **data structures** but a partial **integration layer**. 
 
 ### LLM Trigger Conditions
 
-LLM only fires on: `threat ≥ 0.8` OR `HP drop ≥ 15`. All other ticks use Utility AI. `dialogue` output from LLM is generated but currently not propagated to the target NPC.
+LLM only fires on: `threat ≥ 0.8` OR `HP drop ≥ 15`. All other ticks use Utility AI. As of v1.4.0, `dialogue` output is propagated: `LLMDecisionSystem._apply_pending()` stores it on `NPC.pending_dialogue`, and `SocializeAction.execute()` consumes it and writes a `Dialogue` event into the listener's `NPCMemory`.
 
 ## Documentation
 
 - `docs/architecture.md` — v2.0 Dual-LLM architecture, tick flow, extension points, "What NOT to Do"
 - `docs/llm_data_spec.md` — NPC JSON payload schema, Reasoner/Formatter data specs
 - `docs/dataset_training.md` — Dataset generation pipeline and training targets
-- `docs/bugs_and_issues.md` — Known issues and regression results (20 bugs, 8 fixed in v1.2.0)
-- `docs/nextsteps.md` — **Yol haritası**: eksikler, v1.3/v2.0/v3.0 görev listesi, LLM hedef şeması, dataset gereksinimleri
+- `docs/bugs_and_issues.md` — Known issues and regression results (29 bugs tracked; v1.4.0 fixes #27, #28, #29 partial)
+- `docs/nextsteps.md` — **Yol haritası**: eksikler, v1.4/v1.5/v2.0/v3.0 görev listesi, LLM hedef şeması, dataset gereksinimleri
+- `docs/psychology_model.md` — Vitals decay, stress balance, emotion cross-inhibition, mood label algorithm (v1.4.0+)
+- `docs/integration_map.md` — Memory/Beliefs/Goals/Social/Traits → action consumer matrix (v1.4.0+)
 - `walkthrough.md` — Diagnostic session walkthroughs (v1.0.1 + v1.2.0)
 - `CHANGELOG.md` — Per-version history
 
@@ -154,3 +156,13 @@ LLM only fires on: `threat ≥ 0.8` OR `HP drop ≥ 15`. All other ticks use Uti
 The Ollama server must be running locally at `http://localhost:11434` before enabling `llm_enabled=True`. The default model name `hermes-lora` refers to a custom fine-tuned model. Use `llm_backend="mock"` in `SimulationConfig` for offline development/testing.
 
 For the planned `DualLLMBackend`: two Ollama instances are needed (ports 11434 + 11435). See `docs/nextsteps.md` Section 6 for the implementation sketch.
+
+## Log Analysis
+
+To analyze `logs/sim_full.csv` interactively, open the Jupyter notebook:
+
+```bash
+jupyter notebook notebooks/log_analysis.ipynb
+```
+
+The notebook covers 9 sections: quick overview (shape, NPCs, zones), vital trends, emotion tracking, action distribution, LLM call stats, zone/movement scatter, inventory over time, events & deaths, and a per-NPC summary table. Re-run **Cell 2** after each new diagnostic run to reload fresh data.

@@ -33,6 +33,11 @@ class ActionContext:
         else:
             self.sim_day_hour = 12.0
 
+        # Build tag-grouped cache once per tick for O(1) percept lookups
+        self._percepts_by_tag: dict[str, list[PerceivedObject]] = {}
+        for p in self.active_percepts:
+            self._percepts_by_tag.setdefault(p.tag.lower(), []).append(p)
+
     @property
     def goals(self):
         return self.self_npc.goals
@@ -40,24 +45,14 @@ class ActionContext:
     # ── Perception helpers ──
 
     def has_percept(self, tag: str) -> bool:
-        tag_lower = tag.lower()
-        return any(p.tag.lower() == tag_lower for p in self.active_percepts)
+        return bool(self._percepts_by_tag.get(tag.lower()))
 
     def get_top_percept(self, tag: str) -> PerceivedObject | None:
-        tag_lower = tag.lower()
-        best = None
-        best_sal = -1.0
-        for p in self.active_percepts:
-            if p.tag.lower() != tag_lower:
-                continue
-            if p.salience > best_sal:
-                best_sal = p.salience
-                best = p
-        return best
+        candidates = self._percepts_by_tag.get(tag.lower(), [])
+        return max(candidates, key=lambda p: p.salience, default=None)
 
     def get_all_percepts(self, tag: str) -> list[PerceivedObject]:
-        tag_lower = tag.lower()
-        return [p for p in self.active_percepts if p.tag.lower() == tag_lower]
+        return list(self._percepts_by_tag.get(tag.lower(), []))
 
     # ── Goal helpers ──
 
@@ -67,6 +62,14 @@ class ActionContext:
     def get_top_goal_of_type(self, goal_type: str):
         lst = self.goals.get_by_type(goal_type)
         return lst[0] if lst else None
+
+    def goal_bonus(self, goal_type: str, amount: float = 0.25) -> float:
+        """Additive score bonus when an active goal of this type exists.
+
+        Used by action evaluate() functions to bias scoring toward needs the
+        goal pipeline has already flagged as relevant (G6 integration).
+        """
+        return amount if self.has_goal(goal_type) else 0.0
 
     # ── Memory helpers ──
 
@@ -85,6 +88,26 @@ class ActionContext:
             return 0.0
         total_ew = sum(m.emotional_weight for m in relevant)
         return max(-1.0, min(total_ew / max(1, len(relevant)), 1.0))
+
+    # ── Belief helpers ──
+
+    def belief_score(self, subject: str) -> float:
+        """
+        Returns valence * confidence in [-1, +1] for a given subject (npc_id, zone,
+        topic, …). 0.0 if the belief is unknown or confidence is zero. Used by
+        actions to bias scoring toward / away from subjects the NPC has formed
+        opinions about (G1/G2/G3 integration).
+        """
+        if not subject:
+            return 0.0
+        try:
+            nodes = self.self_npc.beliefs.nodes
+            node = nodes.get(subject)
+        except Exception:
+            return 0.0
+        if node is None or node.confidence <= 0.0:
+            return 0.0
+        return max(-1.0, min(node.valence * node.confidence, 1.0))
 
     def __repr__(self) -> str:
         return (f"[ActionContext] {self.self_npc.identity.display_name} "

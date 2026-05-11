@@ -38,8 +38,17 @@ class NPCPsychology:
 
     # ── Emotion setters ──
 
+    # Anger ↔ Happiness cross-inhibition strength. A rise in one emotion dampens
+    # the other proportionally to the increase. Tuned in docs/psychology_model.md.
+    _CROSS_INHIBITION = 0.5
+
     def set_happiness(self, value: float) -> None:
-        self.happiness = _clamp(value, -1.0, 1.0)
+        new_val = _clamp(value, -1.0, 1.0)
+        delta = new_val - self.happiness
+        self.happiness = new_val
+        # Positive happiness gains dampen anger (you can't stay furious while elated)
+        if delta > 0.0 and self.anger > 0.0:
+            self.anger = _clamp(self.anger * (1.0 - delta * self._CROSS_INHIBITION), 0.0, 1.0)
         self._recalculate_mood()
 
     def set_fear(self, value: float) -> None:
@@ -47,7 +56,12 @@ class NPCPsychology:
         self._recalculate_mood()
 
     def set_anger(self, value: float) -> None:
-        self.anger = _clamp(value, 0.0, 1.0)
+        new_val = _clamp(value, 0.0, 1.0)
+        delta = new_val - self.anger
+        self.anger = new_val
+        # Anger gains dampen positive happiness (rage suppresses joy)
+        if delta > 0.0 and self.happiness > 0.0:
+            self.happiness = _clamp(self.happiness * (1.0 - delta * self._CROSS_INHIBITION), -1.0, 1.0)
         self._recalculate_mood()
 
     # ── Emotion increment helpers ──
@@ -101,6 +115,9 @@ class NPCPsychology:
     def _recalculate_mood(self) -> None:
         if self.fear > 0.8:
             self.mood_label = "Terrified"
+        elif self.anger > 0.6 and self.happiness > 0.6:
+            # Edge case: cross-inhibition should make this rare; defensive label.
+            self.mood_label = "Conflicted"
         elif self.anger > 0.7:
             self.mood_label = "Furious"
         elif self.fear > 0.5:

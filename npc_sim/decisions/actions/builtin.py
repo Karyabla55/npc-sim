@@ -13,6 +13,12 @@ from npc_sim.core.sim_vector3 import SimVector3
 from npc_sim.simulation.world_map import WorldMap
 
 
+def _vital_interrupt(ctx: ActionContext) -> bool:
+    """Break a long-duration lock when vitals become life-threatening."""
+    v = ctx.self_npc.vitals
+    return v.thirst >= 0.85 or v.hunger >= 0.85 or v.health <= v.max_health * 0.25
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # EAT
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -41,7 +47,7 @@ class EatAction(IAction):
         # Urgency multiplier: score rises steeply past threshold so it beats Work
         # at hunger>0.65, Eat score > 0.80 (Work is typically 0.6-0.9)
         urgency = 1.0 + max(0.0, (h - 0.35)) * 3.0
-        return min(1.0, h * h * urgency)
+        return min(1.0, h * h * urgency + ctx.goal_bonus(GoalType.FIND_FOOD))
 
     def execute(self, ctx: ActionContext) -> None:
         v = ctx.self_npc.vitals
@@ -50,6 +56,8 @@ class EatAction(IAction):
         v.set_hunger(max(0.0, v.hunger - self._HUNGER_REDUCTION))
         v.restore_energy(self._ENERGY_GAIN_FRAC * v.max_energy)
         p.set_happiness(min(1.0, p.happiness + self._HAPPINESS_GAIN))
+        # Satisfying hunger relieves a small amount of stress.
+        v.set_stress(max(0.0, v.stress - 0.03 * ctx.delta_time))
         for g in ctx.goals.get_by_type(GoalType.FIND_FOOD):
             g.set_progress(1.0)
         src = "from pack" if ate_inv else "from ground"
@@ -86,7 +94,7 @@ class DrinkAction(IAction):
         t = ctx.self_npc.vitals.thirst
         # Same urgency curve as EatAction — survival beats Work at thirst>0.65
         urgency = 1.0 + max(0.0, (t - 0.35)) * 3.0
-        return min(1.0, t * t * urgency)
+        return min(1.0, t * t * urgency + ctx.goal_bonus(GoalType.FIND_WATER))
 
     def execute(self, ctx: ActionContext) -> None:
         v = ctx.self_npc.vitals
@@ -94,6 +102,8 @@ class DrinkAction(IAction):
         ctx.self_npc.inventory.remove(ItemIds.WATER, 1)
         v.set_thirst(max(0.0, v.thirst - self._THIRST_REDUCTION))
         p.set_happiness(min(1.0, p.happiness + self._HAPPINESS_GAIN))
+        # Quenching thirst relieves a small amount of stress.
+        v.set_stress(max(0.0, v.stress - 0.02 * ctx.delta_time))
         for g in ctx.goals.get_by_type(GoalType.FIND_WATER):
             g.set_progress(1.0)
         if ctx.world:
@@ -114,7 +124,8 @@ class SleepAction(IAction):
     def create_lock(self) -> ActionLock:
         return ActionLock(self.action_id, 480.0,
                           lambda ctx: ctx.self_npc.vitals.energy_norm >= 0.95,
-                          interrupt_allowed=True)
+                          interrupt_allowed=True,
+                          interrupt_predicate=_vital_interrupt)
 
     def is_valid(self, ctx: ActionContext) -> bool:
         v = ctx.self_npc.vitals
@@ -124,9 +135,11 @@ class SleepAction(IAction):
         return v.energy_norm < 0.35   # tighter threshold: was 0.4
 
     def evaluate(self, ctx: ActionContext) -> float:
-        fatigue      = 1.0 - ctx.self_npc.vitals.energy_norm
+        fatigue = 1.0 - ctx.self_npc.vitals.energy_norm
         schedule_pref = ctx.self_npc.schedule.preference_at("sleep", ctx.sim_day_hour)
-        return fatigue * 0.7 + schedule_pref * 0.3
+        base_score = fatigue * 0.7 + schedule_pref * 0.3
+        vital_penalty = 1.0 - max(ctx.self_npc.vitals.thirst, ctx.self_npc.vitals.hunger)
+        return min(1.0, base_score * vital_penalty + ctx.goal_bonus(GoalType.REST))
 
     def execute(self, ctx: ActionContext) -> None:
         v = ctx.self_npc.vitals
@@ -178,6 +191,7 @@ class FleeAction(IAction):
         if ctx.self_npc.traits.has("Coward"):
             base = min(1.0, base * 1.5)
 
+        base += ctx.goal_bonus(GoalType.SURVIVE)
         return max(0.0, min(base, 1.0))
 
     def execute(self, ctx: ActionContext) -> None:
@@ -189,10 +203,11 @@ class FleeAction(IAction):
         new_pos = ctx.self_npc.position + direction * speed * ctx.delta_time
         ctx.world.move_npc(ctx.self_npc.identity.npc_id, new_pos)
         ctx.self_npc.vitals.consume_energy(2.0 * ctx.delta_time)
-        # Fleeing raises fear and stress
+        # Fleeing raises fear and stress; scaled by delta_time because the lock keeps
+        # re-invoking execute() each tick — without scaling, stress grew exponentially.
         npc = ctx.self_npc
-        npc.psychology.set_fear(min(1.0, npc.psychology.fear + 0.15))
-        npc.vitals.set_stress(min(1.0, npc.vitals.stress + 0.05))
+        npc.psychology.set_fear(min(1.0, npc.psychology.fear + 0.15 * ctx.delta_time))
+        npc.vitals.set_stress(min(1.0, npc.vitals.stress + 0.05 * ctx.delta_time))
         ctx.world.publish_event(SimEvent(
             self.action_type, ctx.self_npc.identity.npc_id, threat.object_id,
             f"{ctx.self_npc.identity.display_name} flees from {threat.object_id}.",
@@ -233,15 +248,17 @@ class GatherAction(IAction):
         urgency = max(v.hunger, v.thirst)
         has_food  = inv.has(ItemIds.FOOD)
         has_water = inv.has(ItemIds.WATER)
+        # Goal pipeline already signals "need to acquire" via FIND_FOOD / FIND_WATER.
+        goal_b = max(ctx.goal_bonus(GoalType.FIND_FOOD), ctx.goal_bonus(GoalType.FIND_WATER))
         # If inventory is empty: Gather is the ONLY way to get resources; score must
         # beat WalkTo (which just wanders with no percepts in most maps).
         if not has_food and not has_water:
-            return min(1.0, urgency * 0.85)  # beats WalkTo cap of 0.5
+            return min(1.0, urgency * 0.85 + goal_b)  # beats WalkTo cap of 0.5
         # Both stocked: near-zero so Eat/Drink win
         if has_food and has_water:
             return urgency * 0.08
         # Partially stocked: medium score
-        return urgency * 0.55
+        return min(1.0, urgency * 0.55 + goal_b)
 
     def execute(self, ctx: ActionContext) -> None:
         v = ctx.self_npc.vitals
@@ -292,12 +309,16 @@ class HealAction(IAction):
 
     def evaluate(self, ctx: ActionContext) -> float:
         v = ctx.self_npc.vitals
-        return (1.0 - v.health / v.max_health) * 0.8
+        return min(1.0, (1.0 - v.health / v.max_health) * 0.8 + ctx.goal_bonus(GoalType.HEAL))
 
     def execute(self, ctx: ActionContext) -> None:
         ctx.self_npc.inventory.remove(ItemIds.MEDICINE, 1)
         ctx.self_npc.vitals.heal(25.0)
         ctx.self_npc.psychology.set_fear(max(0.0, ctx.self_npc.psychology.fear - 0.1))
+        # Healing reduces physical stress.
+        ctx.self_npc.vitals.set_stress(
+            max(0.0, ctx.self_npc.vitals.stress - 0.04 * ctx.delta_time)
+        )
         if ctx.world:
             ctx.world.publish_event(SimEvent(
                 self.action_type, ctx.self_npc.identity.npc_id, None,
@@ -341,14 +362,24 @@ class AttackAction(IAction):
         trait_mod = ctx.self_npc.traits.get_weight_modifier(self.action_type)
         goal_boost = 1.3 if ctx.has_goal(GoalType.ATTACK) else 1.0
 
+        threat = ctx.get_top_percept("Threat")
+
         # Brave NPCs get a courage boost proportional to threat level
         brave_boost = 0.0
-        if ctx.self_npc.traits.has("Brave"):
-            threat = ctx.get_top_percept("Threat")
-            if threat:
-                brave_boost = threat.threat_level * 0.4
+        if ctx.self_npc.traits.has("Brave") and threat:
+            brave_boost = threat.threat_level * 0.4
 
-        raw = ((anger * 0.4 + bravery * 0.6) + brave_boost) * trait_mod * goal_boost
+        # Belief valence about the target: negative belief (= "this NPC is hostile")
+        # boosts attack motivation; positive belief (= "ally") penalises it strongly.
+        belief_mod = 0.0
+        if threat and threat.object_id:
+            bs = ctx.belief_score(threat.object_id)
+            if bs <= -0.3:
+                belief_mod = 0.25
+            elif bs >= 0.3:
+                belief_mod = -0.40
+
+        raw = ((anger * 0.4 + bravery * 0.6) + brave_boost + belief_mod) * trait_mod * goal_boost
         return max(0.0, min(raw, 1.0))
 
     def execute(self, ctx: ActionContext) -> None:
@@ -356,13 +387,14 @@ class AttackAction(IAction):
         if not threat:
             return
         npc = ctx.self_npc
-        # Combat raises stress; anger peaks during combat and only cools post-combat
-        npc.vitals.set_stress(min(1.0, npc.vitals.stress + 0.12))
+        # Combat raises stress; scaled by delta_time because the action lock keeps
+        # re-invoking execute() — without scaling, a 10s lock accumulated +1.2 stress.
+        npc.vitals.set_stress(min(1.0, npc.vitals.stress + 0.12 * ctx.delta_time))
         threat_present = ctx.has_percept("Threat")
         if not threat_present:
-            npc.psychology.set_anger(max(0.0, npc.psychology.anger - 0.15))
+            npc.psychology.set_anger(max(0.0, npc.psychology.anger - 0.15 * ctx.delta_time))
         else:
-            npc.psychology.set_anger(min(1.0, npc.psychology.anger + 0.05))
+            npc.psychology.set_anger(min(1.0, npc.psychology.anger + 0.05 * ctx.delta_time))
 
         melee_dist = 3.0
         sq_dist = SimVector3.sqr_distance(npc.position, threat.last_known_position)
@@ -409,28 +441,57 @@ class SocializeAction(IAction):
     def evaluate(self, ctx: ActionContext) -> float:
         ext = ctx.self_npc.psychology.extraversion
         sched = ctx.self_npc.schedule.preference_at("social", ctx.sim_day_hour)
-        return ext * 0.5 + sched * 0.5
+        return min(1.0, ext * 0.5 + sched * 0.5 + ctx.goal_bonus(GoalType.SOCIALIZE))
 
     def execute(self, ctx: ActionContext) -> None:
         ally = ctx.get_top_percept("Ally") or ctx.get_top_percept("NPC")
         if not ally or not ctx.world:
             return
+        speaker = ctx.self_npc
         target = ctx.world.get_npc_by_id(ally.object_id)
         if target:
-            ctx.self_npc.interact(target, 0.05, 0.03, 0.02, ctx.current_time)
-            target.interact(ctx.self_npc, 0.04, 0.03, 0.02, ctx.current_time)
-            salient = ctx.self_npc.memory.get_most_salient()
+            speaker.interact(target, 0.05, 0.03, 0.02, ctx.current_time)
+            target.interact(speaker, 0.04, 0.03, 0.02, ctx.current_time)
+            salient = speaker.memory.get_most_salient()
             if salient:
                 target.witness_event(salient.event,
-                                     [ctx.self_npc.identity.npc_id], ctx.current_time)
+                                     [speaker.identity.npc_id], ctx.current_time)
+
+            # G4: carry the LLM-authored line (or a placeholder) into the target's
+            # episodic memory so dialogue actually reaches the listener. Without
+            # this, "socialise" only mutated relation scalars — the conversation
+            # itself never existed for the other NPC.
+            dialogue = speaker.pending_dialogue or f"{speaker.identity.display_name} greets {target.identity.display_name}."
+            speaker.pending_dialogue = None
+            dialogue_event = SimEvent(
+                "Dialogue", speaker.identity.npc_id, target.identity.npc_id,
+                dialogue, 0.1, ctx.current_time, speaker.position, ctx.rng, "social")
+            target.witness_event(dialogue_event, [speaker.identity.npc_id], ctx.current_time)
+
+            # G5: gossip — propagate the speaker's most-confident belief to the
+            # target, attenuated to simulate retelling fidelity. Trust gates the
+            # transfer (you don't reveal opinions to strangers).
+            speaker_to_target = speaker.social.get_relation(target.identity.npc_id)
+            trust = speaker_to_target.trust if speaker_to_target else 0.0
+            if trust >= 0.3 and speaker.beliefs.nodes:
+                top_belief = max(speaker.beliefs.nodes.values(),
+                                 key=lambda n: n.confidence, default=None)
+                if top_belief and top_belief.confidence >= 0.2:
+                    tgt_node = target.beliefs.get_or_create(top_belief.subject)
+                    tgt_node.valence = max(-1.0, min(1.0,
+                        tgt_node.valence + top_belief.valence * 0.7 * (1.0 - tgt_node.confidence)))
+                    tgt_node.confidence = max(0.0, min(1.0,
+                        tgt_node.confidence + top_belief.confidence * 0.6 * (1.0 - tgt_node.confidence)))
+                    tgt_node.last_updated = ctx.current_time
         # Socialising raises happiness proportional to extraversion
         e = ctx.self_npc.psychology.extraversion
         ctx.self_npc.psychology.set_happiness(
             min(1.0, ctx.self_npc.psychology.happiness + 0.05 * (0.5 + e))
         )
-        # Social contact relieves stress
+        # Social contact relieves stress; scaled by delta_time so a long socialize
+        # lock doesn't crater stress to zero in a single tick chain.
         ctx.self_npc.vitals.set_stress(
-            max(0.0, ctx.self_npc.vitals.stress - 0.08)
+            max(0.0, ctx.self_npc.vitals.stress - 0.08 * ctx.delta_time)
         )
         ctx.world.publish_event(SimEvent(
             self.action_type, ctx.self_npc.identity.npc_id,
@@ -460,7 +521,7 @@ class TradeAction(IAction):
 
     def evaluate(self, ctx: ActionContext) -> float:
         trait_mod = ctx.self_npc.traits.get_weight_modifier(self.action_type)
-        return 0.4 * trait_mod
+        return min(1.0, 0.4 * trait_mod + ctx.goal_bonus(GoalType.TRADE))
 
     def execute(self, ctx: ActionContext) -> None:
         ally = ctx.get_top_percept("Ally") or ctx.get_top_percept("NPC")
@@ -491,9 +552,10 @@ class WorkAction(IAction):
     action_type = "Work"
 
     def create_lock(self) -> ActionLock:
-        return ActionLock(self.action_id, 1800.0, 
-                          lambda ctx: not self.is_valid(ctx) or ctx.self_npc.schedule.preference_at("work", ctx.sim_day_hour) < 0.2, 
-                          interrupt_allowed=True)
+        return ActionLock(self.action_id, 1800.0,
+                          lambda ctx: not self.is_valid(ctx) or ctx.self_npc.schedule.preference_at("work", ctx.sim_day_hour) < 0.2,
+                          interrupt_allowed=True,
+                          interrupt_predicate=_vital_interrupt)
 
     def is_valid(self, ctx: ActionContext) -> bool:
         v = ctx.self_npc.vitals
@@ -511,7 +573,8 @@ class WorkAction(IAction):
         energy = ctx.self_npc.vitals.energy_norm
         # Energy penalty: score halves below 50%, hits near-zero by 25%
         energy_factor = max(0.0, (energy - 0.20) / 0.80)
-        return sched * 0.5 * energy_factor + consc * 0.3 * energy_factor
+        base = sched * 0.5 * energy_factor + consc * 0.3 * energy_factor
+        return min(1.0, base + ctx.goal_bonus(GoalType.WORK))
 
     def execute(self, ctx: ActionContext) -> None:
         npc = ctx.self_npc
@@ -548,19 +611,23 @@ class PrayAction(IAction):
     action_type = "Pray"
 
     def create_lock(self) -> ActionLock:
-        return ActionLock(self.action_id, 600.0, 
-                          lambda ctx: ctx.self_npc.vitals.stress < 0.2, 
-                          interrupt_allowed=True)
+        return ActionLock(self.action_id, 600.0,
+                          lambda ctx: (ctx.self_npc.vitals.stress < 0.2 or
+                                       ctx.self_npc.vitals.thirst > 0.6 or
+                                       ctx.self_npc.vitals.hunger > 0.6),
+                          interrupt_allowed=True,
+                          interrupt_predicate=_vital_interrupt)
 
     def is_valid(self, ctx: ActionContext) -> bool:
         return ctx.self_npc.traits.has("Devout") or ctx.self_npc.vitals.stress > 0.5
 
     def evaluate(self, ctx: ActionContext) -> float:
         stress = ctx.self_npc.vitals.stress
-        devout_bonus = 0.4 if ctx.self_npc.traits.has("Devout") else 0.0
-        # Stress-driven prayer: rises steeply above 0.3
+        devout_bonus = 0.2 if ctx.self_npc.traits.has("Devout") else 0.0  # capped from 0.4
         stress_drive = max(0.0, (stress - 0.3) / 0.7) * 0.6
-        return min(1.0, stress_drive + devout_bonus)
+        base_score = min(1.0, stress_drive + devout_bonus)
+        vital_penalty = 1.0 - max(ctx.self_npc.vitals.thirst, ctx.self_npc.vitals.hunger)
+        return min(1.0, base_score * vital_penalty + ctx.goal_bonus(GoalType.PRAY))
 
     def execute(self, ctx: ActionContext) -> None:
         npc = ctx.self_npc
@@ -584,33 +651,41 @@ class WalkToAction(IAction):
     action_type = "WalkTo"
 
     @classmethod
-    def _get_target(cls, ctx: ActionContext) -> SimVector3 | None:
+    def _get_target(cls, ctx: ActionContext) -> tuple[str | None, SimVector3 | None]:
+        """Returns (zone_name, position). zone_name is None for home_pos."""
         v = ctx.self_npc.vitals
         inv = ctx.self_npc.inventory
-        
+
         # 1. Desperate needs -> specific zones
         if v.hunger > 0.65 and not inv.has(ItemIds.FOOD):
-            return WorldMap.get_zone("Market")
+            return ("Market", WorldMap.get_zone("Market"))
         if v.thirst > 0.65 and not inv.has(ItemIds.WATER):
-            return WorldMap.get_zone("Riverside")
-            
+            return ("Riverside", WorldMap.get_zone("Riverside"))
+
         # 2. Schedule-driven Movement
         sleep_pref = ctx.self_npc.schedule.preference_at("sleep", ctx.sim_day_hour)
         if sleep_pref > 0.8:
-            return ctx.self_npc.home_pos
+            return (None, ctx.self_npc.home_pos)
 
         work_pref = ctx.self_npc.schedule.preference_at("work", ctx.sim_day_hour)
         if work_pref > 0.8:
             # Send them to Town Square to socialize/work unless they are farmers
             if ctx.self_npc.identity.occupation.lower() == "farmer":
-                return WorldMap.get_zone("Farm")
-            return WorldMap.get_zone("Town Square")
-            
-        return WorldMap.get_zone("Tavern")
+                return ("Farm", WorldMap.get_zone("Farm"))
+            return ("Town Square", WorldMap.get_zone("Town Square"))
+
+        return ("Tavern", WorldMap.get_zone("Tavern"))
+
+    @classmethod
+    def _zone_bias(cls, ctx: ActionContext, zone_name: str | None) -> float:
+        """Combined memory + belief bias for a target zone, in [-1, +1]."""
+        if not zone_name:
+            return 0.0
+        return ctx.get_memory_threat_bias(zone_name) * 0.6 + ctx.belief_score(zone_name) * 0.4
 
     def create_lock(self) -> ActionLock:
         def exit_cond(ctx):
-            target = self._get_target(ctx)
+            _, target = self._get_target(ctx)
             if not target:
                 return True
             return SimVector3.distance(ctx.self_npc.position, target) < 2.0
@@ -623,35 +698,46 @@ class WalkToAction(IAction):
     def evaluate(self, ctx: ActionContext) -> float:
         v   = ctx.self_npc.vitals
         inv = ctx.self_npc.inventory
-        
-        target = self._get_target(ctx)
+
+        zone_name, target = self._get_target(ctx)
         if not target:
             return 0.05
-            
+
         dist = SimVector3.distance(ctx.self_npc.position, target)
         if dist < 2.0:
             return 0.0  # Already there
-            
+
+        # Memory/belief bias for the target zone. Negative bias = "this place hurt
+        # me before / I distrust it" → discount the score; positive bias = boost.
+        bias = self._zone_bias(ctx, zone_name)
+        # Cap the modulation so a single bad memory can't fully suppress survival-
+        # critical walks. Survival walks (hunger/thirst > 0.65) get a smaller
+        # modulation, exploration walks a larger one.
         if v.hunger > 0.65 and not inv.has(ItemIds.FOOD):
             market_pos = WorldMap.get_zone("Market")
             if market_pos is not None:
                 market_dist = SimVector3.distance(ctx.self_npc.position, market_pos)
                 if market_dist > 2.0:
-                    return min(1.0, v.hunger * 0.92)  # beats GatherAction's 0.85
-            return min(1.0, v.hunger * 0.85)  # already at market or zone missing
+                    base = min(1.0, v.hunger * 0.92)  # beats GatherAction's 0.85
+                else:
+                    base = min(1.0, v.hunger * 0.85)
+            else:
+                base = min(1.0, v.hunger * 0.85)
+            return max(0.0, min(1.0, base + bias * 0.15))
         if v.thirst > 0.65 and not inv.has(ItemIds.WATER):
-            return min(1.0, v.thirst * 0.85)
-            
+            base = min(1.0, v.thirst * 0.85)
+            return max(0.0, min(1.0, base + bias * 0.15))
+
         # If they need to sleep, and they aren't home, walk home!
         sleep_pref = ctx.self_npc.schedule.preference_at("sleep", ctx.sim_day_hour)
         if sleep_pref > 0.8 and dist >= 2.0:
-            return 0.90 # High priority to go home to sleep
-            
+            return 0.90  # High priority to go home to sleep (home is not biased)
+
         work_pref = ctx.self_npc.schedule.preference_at("work", ctx.sim_day_hour)
         if work_pref > 0.8 and dist >= 2.0:
-            return 0.75 # Good priority to commute
-            
-        return 0.35 # Default wandering to Tavern
+            return max(0.0, min(1.0, 0.75 + bias * 0.25))  # commute can be biased
+
+        return max(0.0, min(1.0, 0.35 + bias * 0.40))  # wandering is most flexible
 
     def execute(self, ctx: ActionContext) -> None:
         npc = ctx.self_npc
@@ -659,7 +745,7 @@ class WalkToAction(IAction):
             return
 
         speed = 2.0
-        target = self._get_target(ctx)
+        _, target = self._get_target(ctx)
         npc.current_destination = target
         
         if target:

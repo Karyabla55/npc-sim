@@ -32,7 +32,8 @@ class DecisionSystem:
         # Threat is computed from latest percepts; hunger/thirst directly from vitals
         highest_threat = ctx.get_top_percept("Threat")
         threat_level = highest_threat.threat_level if highest_threat else 0.0
-        hard_interrupt = vitals.hunger > 0.85 or vitals.thirst > 0.85 or threat_level >= 0.8
+        hard_interrupt = (vitals.hunger > 0.85 or vitals.thirst > 0.85 or
+                          threat_level >= 0.8 or vitals.health <= vitals.max_health * 0.25)
 
         # Fear spike when NPC first perceives a significant threat
         if highest_threat and threat_level >= 0.8:
@@ -49,11 +50,14 @@ class DecisionSystem:
                 self._active_lock = None  # Lock broken by interrupt
             else:
                 if self._lock_elapsed < self._active_lock.min_duration_sim_seconds:
-                    # Still serving minimum duration — lock is unbreakable here
-                    locked_action = self._library.get(self._active_lock.action_id)
-                    if locked_action:
-                        locked_action.execute(ctx)
-                        return locked_action
+                    pred = self._active_lock.interrupt_predicate
+                    if pred and pred(ctx):
+                        self._active_lock = None  # vital-driven break during min_duration
+                    else:
+                        locked_action = self._library.get(self._active_lock.action_id)
+                        if locked_action:
+                            locked_action.execute(ctx)
+                            return locked_action
                 else:
                     # Min duration elapsed, check arbitrary exit condition
                     if self._active_lock.exit_condition(ctx):

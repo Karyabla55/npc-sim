@@ -57,6 +57,10 @@ class NPC:
         self.forward = SimVector3(0, 0, 1)
         self.is_active = True
 
+        # Latest LLM-generated dialogue line, consumed by SocializeAction.
+        # None when no LLM utterance is pending; cleared by the consumer.
+        self.pending_dialogue: str | None = None
+
         # Config reference (injected by SimulationManager)
         self._config: SimulationConfig | None = None
 
@@ -98,9 +102,13 @@ class NPC:
         stress_anger = self.vitals.stress * 0.02 * delta_time * self.psychology.neuroticism
         self.psychology.set_anger(self.psychology.anger + stress_anger)
 
-        # Hunger/Thirst → Stress
+        # Hunger/Thirst → Stress, balanced by a baseline organic recovery so that
+        # idle/calm NPCs drift down rather than ratcheting toward 1.0. Without the
+        # baseline term, NPCs that don't (or can't) trigger Eat/Sleep/Socialize
+        # accumulated stress monotonically.
         need_stress = (self.vitals.hunger + self.vitals.thirst) * 0.01 * delta_time
-        self.vitals.set_stress(self.vitals.stress + need_stress)
+        baseline_recovery = 0.004 * delta_time * (1.0 - self.psychology.neuroticism * 0.5)
+        self.vitals.set_stress(self.vitals.stress + need_stress - baseline_recovery)
 
         # Emotional decay
         self.psychology.decay_emotions(delta_time, fear_rate, happy_rate, anger_rate)
@@ -128,9 +136,12 @@ class NPC:
         # Update beliefs about each subject
         self.beliefs.process_event(sim_event, belief_subjects, current_time)
 
-        # Emotional reaction
-        stress_delta = abs(sim_event.impact) * 0.1 * self.psychology.neuroticism
-        self.vitals.set_stress(self.vitals.stress + stress_delta)
+        # Emotional reaction — only NEGATIVE events raise stress. Previously this
+        # used abs(impact), so every positive event (Eat, Work, Trade …) also
+        # pushed stress up, which made stress climb monotonically toward 1.0.
+        if sim_event.impact < 0.0:
+            stress_delta = -sim_event.impact * 0.1 * self.psychology.neuroticism
+            self.vitals.set_stress(self.vitals.stress + stress_delta)
 
         if sim_event.impact < -0.3:
             fear_spike = abs(sim_event.impact) * 0.15 * self.psychology.neuroticism

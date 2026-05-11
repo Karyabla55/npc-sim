@@ -5,6 +5,102 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.4.0] – 2026-05-11
+
+Psychology stability pass + Memory/Beliefs/Goals integration with the Utility AI
+(roadmap tasks G1–G6 from `docs/nextsteps.md`). Diagnostic comparison (6 sim-hours,
+`seed=42`, 5 archetypes):
+
+| Metric                          | v1.3.x | v1.4.0 |
+|---------------------------------|--------|--------|
+| Mean stress                     | 0.745  | 0.532  |
+| Stress > 0.9 (% of rows)        | 57.7 % | 31.3 % |
+| Mean anger                      | 0.431  | 0.237  |
+| Rows with anger≥0.7 AND hap≥0.7 | (latent) | **0** |
+| Mood "Calm" share               | 53 %   | 75 %   |
+
+### Fixed
+
+- **Bug #27 — Monotonic stress accumulation** (`npc_sim/decisions/actions/builtin.py`,
+  `npc_sim/npc/npc.py`):
+  - `FleeAction.execute()` and `AttackAction.execute()` were adding flat `+0.05` /
+    `+0.12` to stress every tick of the action lock (`builtin.py:204, 369`). With
+    `delta_time = 0.1` and an 8–10 sim-second lock, stress climbed by ~1.0 per
+    encounter. Scaled both deltas by `ctx.delta_time` so the lock contributes a
+    realistic amount.
+  - `NPC.witness_event()` used `abs(impact)` for the stress nudge — so positive
+    events (Eat, Work, Trade…) also raised stress while raising happiness. Now
+    only `impact < 0.0` events feed stress.
+  - `NPC.tick()` had no baseline stress recovery; idle NPCs accumulated stress
+    indefinitely from need-stress. Added a low-rate `baseline_recovery` term
+    scaled inversely with neuroticism.
+  - `SocializeAction.execute()` stress relief also wasn't `delta_time` scaled —
+    a long socialize lock could crater stress in one chain. Now scaled.
+  - `EatAction`, `DrinkAction`, `HealAction` now reduce stress proportional to
+    `delta_time` so meeting basic needs feels recoverable.
+
+- **Bug #28 — Anger and Happiness could both reach 1.0 simultaneously**
+  (`npc_sim/npc/psychology.py`): `set_anger()` and `set_happiness()` were fully
+  independent; the mood label's if-elif chain hid the conflict but the state was
+  internally contradictory. Implemented cross-inhibition: a positive delta to
+  one emotion proportionally dampens the other (factor `_CROSS_INHIBITION = 0.5`).
+  Added a defensive `"Conflicted"` mood label for edge cases where both still
+  cross 0.6 (cross-inhibition makes this rare).
+
+### Added
+
+- **`ActionContext.belief_score(subject)`** (`npc_sim/decisions/action_context.py`):
+  Returns `valence × confidence` in `[-1, +1]` for a subject (NPC id, zone, topic).
+  Used by `WalkToAction` and `AttackAction` to bias scoring with the BeliefSystem.
+- **`ActionContext.goal_bonus(goal_type, amount=0.25)`**: Additive score bonus for
+  actions whose related goal is active. Threaded through Eat, Drink, Sleep, Heal,
+  Socialize, Trade, Work, Pray, Gather, Flee.
+- **`WalkToAction` memory + belief bias** (G2): The target zone is now exposed as
+  `(zone_name, position)` and `_zone_bias()` combines `get_memory_threat_bias()`
+  and `belief_score()` for the target zone. Negative bias discounts the walk score
+  (NPC avoids places it associates with harm); positive bias boosts it. Survival
+  walks (hunger/thirst > 0.65) get a smaller modulation than exploratory walks.
+- **`AttackAction` belief valence** (G3): Negative belief about the target
+  (`belief_score ≤ -0.3`) adds `+0.25` to the attack score; positive belief
+  (`≥ 0.3`) applies `-0.40`. Pacifist/Brave/anger logic preserved.
+- **`SocializeAction` dialogue + gossip** (G4 + G5): LLM-authored dialogue is
+  carried to the target via `NPC.pending_dialogue` and recorded as a `Dialogue`
+  episodic memory on the listener. The speaker's highest-confidence belief is
+  propagated to the listener with attenuated valence/confidence (gossip retelling
+  fidelity), gated by relationship trust (`trust ≥ 0.3`).
+- **`NPC.pending_dialogue`** (`npc_sim/npc/npc.py`): Buffer for LLM-authored lines,
+  set in `LLMDecisionSystem._apply_pending()` and consumed by `SocializeAction`.
+
+### Changed
+
+- Mood label algorithm now exposes a `"Conflicted"` state for `anger > 0.6 AND
+  happiness > 0.6` (`npc_sim/npc/psychology.py`).
+- Version: `1.3.0` → `1.4.0` in `pyproject.toml` and `npc_sim/__init__.py`.
+
+### Documentation
+
+- **New: `docs/psychology_model.md`** — Formal documentation of vitals decay,
+  stress balance, emotion model with cross-inhibition, mood label algorithm,
+  and trait modifiers.
+- **New: `docs/integration_map.md`** — Data-source → consumer matrix showing
+  which actions read which subsystems (Memory, Beliefs, Goals, Social, Traits),
+  pre-v1.4.0 vs post-v1.4.0 wiring, and remaining gaps.
+- `docs/bugs_and_issues.md`: Added #27 (stress accumulation), #28 (anger/happiness
+  independence), #29 (Memory/Beliefs/Goals integration gap — partial fix).
+- `docs/nextsteps.md`: G1–G6 marked completed; G7, G8 moved to v1.5.
+- `CLAUDE.md`: "What Exists vs What's Integrated" section updated to reflect
+  partial integration.
+
+### Known Limitations
+
+- Diagnostic NPCs still bias heavily toward `Work` and don't trigger
+  `Eat`/`Drink`/`Socialize` within a 6-hour run; the stress-relief / happiness
+  pathways those actions provide are present but rarely exercised in current
+  diagnostic configuration. Tracked as part of action-selection tuning, separate
+  from this release.
+
+---
+
 ## [1.3.0] – 2026-05-02
 
 ### Fixed
