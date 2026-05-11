@@ -23,6 +23,19 @@ strategy: invariant tests + per-fix 6h smoke + per-phase 30 sim-day milestone.
   exactly 100 instead of growing linearly. Covered by
   `tests/test_inventory_cap.py` (5 cases).
 
+- **A7 — Invariant assertion framework** (`npc_sim/diagnostics/invariants.py`,
+  `run_diagnostic.py`): no automated safety net existed for catching long-run
+  drift (NaN vitals, runaway inventory, dict cap violation). New
+  `check_invariants(sim_manager)` walks every NPC and returns a list of
+  `InvariantViolation`s covering: vital finiteness/range
+  (hp ∈ [0, max_hp], energy ∈ [0, max_energy], hunger/thirst/stress ∈ [0,1]),
+  emotion finiteness/range, inventory ≤ A1 cap, beliefs ≤ A2 cap, relations
+  ≤ A3 cap, memory count ≤ ring capacity. `run_diagnostic.py` gained
+  `--strict` (check every `--strict-every=1000` ticks; exit code 2 on
+  violation). The framework caught a real bug while being wired up — initial
+  invariant code wrongly assumed `energy ∈ [0,1]` instead of `[0, max_energy]`,
+  fixed before merge. Covered by `tests/test_invariants.py` (8 cases).
+
 - **A6 — Unbounded CSV log growth** (`npc_sim/diagnostics/sim_logger.py`):
   `sim_full.csv` was opened once and appended forever — at 10 NPCs × 1 tick/s
   that's ~315M rows/year, gigabytes of disk and slow append. Added

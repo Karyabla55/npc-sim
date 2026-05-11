@@ -49,6 +49,10 @@ def parse_args():
     parser.add_argument("--speed", type=float, default=1.0, help="time_scale multiplier (default=1)")
     parser.add_argument("--seed", type=int, default=42, help="rng seed (default=42)")
     parser.add_argument("--npc-count", type=int, default=5, dest="npc_count", help="number of NPCs (default=5)")
+    parser.add_argument("--strict", action="store_true",
+                        help="Check long-run invariants every --strict-every ticks; exit 2 on violation.")
+    parser.add_argument("--strict-every", type=int, default=1000, dest="strict_every",
+                        help="Invariant check interval in ticks (default=1000)")
     return parser.parse_args()
 
 
@@ -135,6 +139,10 @@ def run(mgr: SimulationManager, args) -> None:
     tick = 0
     report_interval = int(TICK_RATE * 60 * 30)  # print progress every 30 sim-min
 
+    check_invariants = None
+    if args.strict:
+        from npc_sim.diagnostics.invariants import check_invariants  # noqa: F811
+
     while sim_elapsed < sim_seconds:
         mgr.tick(REAL_DELTA)
         sim_elapsed += REAL_DELTA * args.speed
@@ -146,8 +154,21 @@ def run(mgr: SimulationManager, args) -> None:
             print(f"  [{h:.1f}h] tick={tick}  alive={alives}/{args.npc_count}  "
                   f"sim_t={sim_elapsed:.0f}s")
 
+        if check_invariants is not None and tick % args.strict_every == 0:
+            violations = check_invariants(mgr)
+            if violations:
+                print(f"\n[STRICT] {len(violations)} invariant violation(s) at tick={tick}:")
+                for v in violations[:20]:
+                    print(f"  {v}")
+                if len(violations) > 20:
+                    print(f"  ... and {len(violations) - 20} more")
+                mgr.logger.close()
+                raise SystemExit(2)
+
     real_elapsed = time.perf_counter() - t0
     print(f"\nRun complete: {tick} ticks in {real_elapsed:.1f}s real time")
+    if args.strict:
+        print("[STRICT] All invariants held across the run.")
     mgr.logger.close()
 
 
