@@ -23,6 +23,15 @@ strategy: invariant tests + per-fix 6h smoke + per-phase 30 sim-day milestone.
   exactly 100 instead of growing linearly. Covered by
   `tests/test_inventory_cap.py` (5 cases).
 
+- **A4 — FactionRegistry stale dispositions** (`npc_sim/simulation/faction_registry.py`):
+  `tick_decay()` cleanup threshold was `1e-6`. Floating-point rounding
+  during multiplicative decay would freeze values slightly above that, so
+  faded dispositions were retained indefinitely. Raised the threshold to
+  `0.01` (now exposed as `_CLEANUP_THRESHOLD` class constant), matching
+  the practical "no longer matters" floor used elsewhere. Old dispositions
+  fully clear after ~2000 sim-seconds of decay. Covered by
+  `tests/test_faction_cleanup.py` (4 cases).
+
 - **A3 — NPCSocial.Relation dict unbounded growth** (`npc_sim/npc/social.py`):
   `NPCSocial._relations` grew without eviction. Every novel NPC encounter
   created a new `Relation` even when it stayed near zero forever; over years

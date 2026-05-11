@@ -8,6 +8,8 @@ from __future__ import annotations
 class FactionRegistry:
     """Manages faction registrations and inter-faction dispositions."""
 
+    _CLEANUP_THRESHOLD: float = 0.01
+
     def __init__(self):
         self._factions: set[str] = set()
         self._dispositions: dict[tuple[str, str], float] = {}
@@ -32,7 +34,7 @@ class FactionRegistry:
                 self._dispositions[key] = max(0.0, val - decay)
             elif val < 0:
                 self._dispositions[key] = min(0.0, val + decay)
-            if abs(self._dispositions[key]) < 1e-6:
+            if abs(self._dispositions[key]) < self._CLEANUP_THRESHOLD:
                 keys_to_remove.append(key)
         for k in keys_to_remove:
             del self._dispositions[k]
