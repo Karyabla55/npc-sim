@@ -2,6 +2,14 @@
 
 **Version:** 2.0 (Dual-LLM) | **Author:** Sadık Abdusselam Albayrak | **License:** Apache 2.0
 
+> **Implementation status (as of v1.5.0):** Bu spec'in tanımladığı asimetrik
+> Dual-LLM (Reasoner + Formatter) pipeline'ı kodda HENÜZ yok. Şu an
+> `npc_sim/llm/llm_backend.py` yalnızca `OllamaBackend` (tek model) ve
+> `MockBackend` sağlıyor. `DualLLMBackend` v1.5 yol haritasında G9 görevi
+> olarak planlandı (bkz. `docs/nextsteps.md`). Bu doküman aşağıdaki şemayı
+> hedef mimari olarak okuyun; mevcut tek-model davranışı bu spec'in alt
+> kümesidir (Reasoner + Formatter aynı modelde birleşir).
+
 Bu belge NPC-Sim'in LLM entegrasyon katmanının veri tiplerini, şemasını ve beklenen model davranışlarını tanımlar. Asimetrik Dual-LLM mimarisi kullanarak kendi modelini eğitecek araştırmacılar için birincil referans kaynağıdır.
 
 ---

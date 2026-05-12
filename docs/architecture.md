@@ -156,7 +156,15 @@ The tick-counter path was deliberately removed. Interrupt-only is the correct mo
 
 # Architecture v2.0 — Dual-LLM Cognitive Motor Pipeline
 
-**Added:** 2026-04-20 · **Status:** Active
+**Added:** 2026-04-20 · **Status:** **Planned (v1.5 roadmap)** — design only.
+
+> **Implementation status (as of v1.5.0):** This dual-model design is *not*
+> wired in yet. Only `OllamaBackend` (single model) and `MockBackend` exist
+> in `npc_sim/llm/llm_backend.py`. The `DualLLMBackend` class, the
+> `_validate_rationale()` H6 gate, and the two-port Ollama topology
+> described below are scheduled for v1.5 (roadmap task G9 in
+> `docs/nextsteps.md`). Treat this section as the target architecture, not
+> the current behavior.
 
 ## Motivation
 

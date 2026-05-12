@@ -13,6 +13,16 @@ strategy: invariant tests + per-fix 6h smoke + per-phase 30 sim-day milestone.
 
 ### Polish (tracker)
 
+- **C5 / #16 — Doc sync: DualLLM marked as planned, not implemented**
+  (`docs/architecture.md`, `docs/llm_data_spec.md`): both docs read as if
+  the dual-model Reasoner/Formatter pipeline already existed; CLAUDE.md
+  was the only place that warned readers it does not. Added a callout at
+  the top of each doc's relevant section pointing to roadmap task G9 in
+  `docs/nextsteps.md` and explicitly noting that
+  `npc_sim/llm/llm_backend.py` ships only `OllamaBackend` and
+  `MockBackend`. This closes the spec/code mismatch described in tracker
+  #16. Doc-only change; no code touched.
+
 - **C4 / #18 — Interrupt preempts in-flight LLM requests**
   (`npc_sim/llm/llm_request_queue.py`): the priority heap correctly
   ordered _pending_ work, but once a normal/background request was
