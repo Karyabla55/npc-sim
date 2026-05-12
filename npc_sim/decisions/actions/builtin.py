@@ -628,18 +628,19 @@ class WorkAction(IAction):
         
         efficiency = max(0.05, npc.vitals.energy_norm)
         occ = npc.identity.occupation.lower()
-        
+
         if ctx.rng.chance(efficiency):
+            yield_amount = max(1, int(efficiency * 2))
             if occ == "farmer":
-                npc.inventory.add(ItemIds.GRAIN, 1)
+                npc.inventory.add(ItemIds.GRAIN, yield_amount)
             elif occ == "merchant":
-                npc.inventory.add(ItemIds.GOLD, 1)
+                npc.inventory.add(ItemIds.GOLD, yield_amount)
             elif occ == "guard":
                 pass
             elif occ == "scholar":
                 pass
             else:
-                npc.inventory.add(ItemIds.TOOLS, 1)
+                npc.inventory.add(ItemIds.TOOLS, yield_amount)
                 
         if ctx.world:
             ctx.world.publish_event(SimEvent(

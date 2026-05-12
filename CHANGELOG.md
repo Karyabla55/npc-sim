@@ -11,6 +11,19 @@ Risk-first triage of the long-run stability audit (Phase A), then integration
 gap closure (Phase B), then 5 pending tracker bugs (Phase C). Validation
 strategy: invariant tests + per-fix 6h smoke + per-phase 30 sim-day milestone.
 
+### Polish (tracker)
+
+- **C1 / #15 — Work efficiency now reaches the yield**
+  (`npc_sim/decisions/actions/builtin.py`): `WorkAction.execute()` computed
+  `efficiency = max(0.05, energy_norm)` and used it only as the probability
+  gate for whether the tick produced anything. The same `efficiency` was
+  logged in the event description, suggesting it scaled the output — but
+  every successful tick produced exactly `+1` regardless of energy. Now
+  `yield_amount = max(1, int(efficiency * 2))`: well-rested NPCs produce
+  `+2` per successful tick, depleted ones still get the `+1` floor.
+  Inventory cap (A1) still applies. Covered by `tests/test_work_efficiency.py`
+  (5 cases).
+
 ### Integration
 
 - **B4 — Faction disposition reaches Utility AI**
