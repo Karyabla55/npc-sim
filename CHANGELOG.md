@@ -13,6 +13,19 @@ strategy: invariant tests + per-fix 6h smoke + per-phase 30 sim-day milestone.
 
 ### Integration
 
+- **B2 — WorkAction reads workplace-safety belief**
+  (`npc_sim/decisions/actions/builtin.py`, `npc_sim/simulation/world_map.py`):
+  `WorkAction.evaluate()` ignored the NPC's beliefs about its own workplace,
+  so a Farmer would still go to the field after a bandit raid. Added
+  `WorldMap.get_home_zone_name(occupation)` and a single
+  `OCCUPATION_HOME_ZONE` table that `get_home_for_occupation` now reuses
+  instead of duplicating the mapping. `WorkAction.evaluate()` consults
+  `ctx.belief_score(home_zone)`: negative beliefs drop the score by up to
+  −0.25 so the NPC stays away from places it remembers as dangerous.
+  Positive beliefs do not inflate score (work is already preferred during
+  scheduled hours; this is purely a safety guard). Covered by
+  `tests/test_work_beliefs.py` (5 cases).
+
 - **B1 — TradeAction reads target belief valence**
   (`npc_sim/decisions/actions/builtin.py`): trade scoring previously ignored
   what the NPC knew about the potential partner. `evaluate()` now consults

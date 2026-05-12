@@ -23,17 +23,18 @@ class WorldMap:
     def get_zone(cls, name: str) -> SimVector3:
         return cls.ZONES.get(name, cls.ZONES["Town Square"])
     
+    OCCUPATION_HOME_ZONE: dict[str, str] = {
+        "farmer": "Farm",
+        "guard": "Barracks",
+        "scholar": "Academy",
+        "priest": "Temple",
+        "merchant": "Market",
+    }
+
+    @classmethod
+    def get_home_zone_name(cls, occupation: str) -> str:
+        return cls.OCCUPATION_HOME_ZONE.get(occupation.lower(), "Tavern")
+
     @classmethod
     def get_home_for_occupation(cls, occupation: str) -> SimVector3:
-        occ = occupation.lower()
-        if occ == "farmer":
-            return cls.ZONES["Farm"]
-        if occ == "guard":
-            return cls.ZONES["Barracks"]
-        if occ == "scholar":
-            return cls.ZONES["Academy"]
-        if occ == "priest":
-            return cls.ZONES["Temple"]
-        if occ == "merchant":
-            return cls.ZONES["Market"]
-        return cls.ZONES["Tavern"]  # Civilian / default
+        return cls.ZONES[cls.get_home_zone_name(occupation)]

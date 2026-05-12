@@ -588,7 +588,13 @@ class WorkAction(IAction):
         # Energy penalty: score halves below 50%, hits near-zero by 25%
         energy_factor = max(0.0, (energy - 0.20) / 0.80)
         base = sched * 0.5 * energy_factor + consc * 0.3 * energy_factor
-        return min(1.0, base + ctx.goal_bonus(GoalType.WORK))
+        score = base + ctx.goal_bonus(GoalType.WORK)
+        # B2: workplace-safety belief — avoid known-dangerous work zones
+        zone = WorldMap.get_home_zone_name(ctx.self_npc.identity.occupation)
+        belief = ctx.belief_score(zone)
+        if belief < 0.0:
+            score += 0.25 * belief
+        return max(0.0, min(1.0, score))
 
     def execute(self, ctx: ActionContext) -> None:
         npc = ctx.self_npc
