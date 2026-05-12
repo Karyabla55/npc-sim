@@ -18,6 +18,10 @@ python server.py
 ```bash
 python run_diagnostic.py [--hours 6.0] [--speed 1.0] [--seed 42] [--npc-count 5]
 # Outputs: logs/sim_full.csv (44 columns, 1 row per NPC per tick)
+
+# Long-run validation with invariant assertions every N ticks (default 1000):
+python run_diagnostic.py --hours 720 --strict --strict-every 1000 --seed 42
+# Exit code 2 + violation listing if any long-run invariant breaks.
 ```
 
 ### Smoke Tests
@@ -26,13 +30,21 @@ python test_llm_smoke.py
 # Tests WorldRegistry, MockBackend, OllamaBackend, SimConfig, dataset generator
 ```
 
+### pytest Suite
+```bash
+python -m pytest tests/ -q
+# 68 cases as of v1.5.0 (inventory cap, dict eviction, multiplicative decay,
+# CSV rotation, invariants, action wiring, trait coherence, queue preemption,
+# config hygiene)
+```
+
 ### Install
 ```bash
 pip install -r requirements.txt
-# Optional dev deps: pip install -e ".[dev]"
+# Optional dev deps: pip install -e ".[dev]"   # adds pytest, pytest-cov
 ```
 
-There is no Makefile, no CI, and no pytest suite yet. `pyproject.toml` defines optional `pytest>=8.0` deps but no tests use it.
+There is no Makefile and no CI yet. `pyproject.toml` defines `pytest>=8.0` under `[dev]` extras; the suite lives under `tests/`.
 
 ## Architecture
 
@@ -42,7 +54,9 @@ Every NPC tick runs both layers sequentially inside `SimulationManager.tick()`:
 
 **Layer 1 — Utility AI** (`npc_sim/decisions/`): Pure math, runs every tick without LLM. `UtilityEvaluator` scores all 12 built-in actions and picks the highest. Trait modifiers adjust scores (e.g., `Brave` suppresses flee; `Pacifist` suppresses attack).
 
-**Layer 2 — LLM Brain** (`npc_sim/llm/`): Fires only on interrupt (threat ≥ 0.8 or HP drop ≥ 15). Async — the simulation never blocks waiting for LLM. Uses a **Dual-LLM pipeline** in v1.1.0+:
+**Layer 2 — LLM Brain** (`npc_sim/llm/`): Fires only on interrupt (threat ≥ 0.8 or HP drop ≥ 15). Async — the simulation never blocks waiting for LLM. Currently a **single-model pipeline** through `OllamaBackend`; the asymmetric **Dual-LLM pipeline** below is documented as the target design for v1.5+ (roadmap task G9 in `docs/nextsteps.md`) but is not implemented yet — see "DualLLMBackend Status" below.
+
+Planned Dual-LLM split:
 - **Reasoner** (3B Llama 3.2): receives full NPC state JSON, outputs Turkish Chain-of-Thought
 - **Formatter** (1B Llama 3.2): receives CoT, outputs strict JSON `LLMResponse` with `action_id`, `target_id`, `dialogue`, `emotion`
 
@@ -54,9 +68,9 @@ The LLM result is applied on the *next* tick via `_apply_pending()`, not immedia
 |----|-----------|--------------|
 | H1 | `WorldRegistry` | Maps raw XY coordinates → zone labels (`MarketSquare`, `Tavern`, …) so the LLM sees meaningful location names |
 | H2 | `LLMDecisionSystem._check_interrupt()` | Only fires LLM on threat ≥ 0.8 or HP drop ≥ 15 — prevents spam |
-| H3 | `LLMRequestQueue` | Priority-based async queue (interrupt=0, normal=5, background=10); serial Ollama calls prevent VRAM saturation |
+| H3 | `LLMRequestQueue` | Priority-based async queue (interrupt=0, normal=5, background=10); serial Ollama calls prevent VRAM saturation. v1.5.0+: an arriving INTERRUPT marks any in-flight lower-priority request `_cancelled` so its callback short-circuits to `(None, None)` instead of clobbering the interrupt path |
 | H4 | `_guided_retry()` | Invalid `action_id` → one corrective prompt to Formatter only (not expensive Reasoner) |
-| H5 | `_enforce_trait_coherence()` | Post-inference override: `Brave`+low fear+high threat → `attack`; `Pacifist` → no-attack |
+| H5 | `_enforce_trait_coherence()` | Post-inference override. v1.5.0+ covers 5 named traits: `Brave`+low fear+high threat → `attack`; `Pacifist` → no-attack; `Coward`+threat≥0.5 → `flee`; `Greedy`+gold+valid trade → `trade`; `Devout`+stress≥0.6+valid pray → `pray` |
 
 ### Tick Execution Order (per `SimulationManager.tick()`)
 
@@ -92,8 +106,9 @@ FactionRegistry.tick_decay()             ← decay faction trust
 | `npc_sim/simulation/simulation_manager.py` | Top-level tick orchestrator |
 | `npc_sim/simulation/world_map.py` | 10 zones + named landmarks |
 | `npc_sim/simulation/spatial_grid.py` | `DictionaryGrid` — O(1) coordinate → NPC lookups |
-| `npc_sim/simulation/faction_registry.py` | Asymmetric inter-faction disposition matrix |
-| `npc_sim/diagnostics/sim_logger.py` | Per-tick CSV logger (44 columns; zero-overhead when disabled) |
+| `npc_sim/simulation/faction_registry.py` | Asymmetric inter-faction disposition matrix; cleanup threshold `0.01` (v1.5.0+) |
+| `npc_sim/diagnostics/sim_logger.py` | Per-tick CSV logger (44 columns; zero-overhead when disabled). v1.5.0+: rotates `sim_full.csv` → `sim_full.NNNN.csv` every `rotate_every_rows=1_000_000` rows |
+| `npc_sim/diagnostics/invariants.py` | Long-run safety net (v1.5.0+): `check_invariants(mgr) → list[InvariantViolation]` covering vital range/finiteness, dict caps, inventory cap, memory ring overflow. Wired into `run_diagnostic.py --strict` |
 | `server.py` | Flask + SocketIO web dashboard |
 | `run_diagnostic.py` | Headless runner for regression testing |
 | `Stateful_NPC/generator/npc_sim_generator_v2.py` | Training data generator (CoT + JSON pairs) |
@@ -124,12 +139,15 @@ All randomness flows through `SimRng` (wraps `random.Random` with a seeded const
 
 ### What Exists vs What's Integrated
 
-The project has strong **data structures** with an **expanding integration layer**. As of v1.4.0, Memory/Beliefs/Goals/Social all influence at least one Utility AI action. Coverage is still partial — see `docs/integration_map.md` for the full data-source → consumer matrix.
+The project has strong **data structures** with a **largely-wired integration layer**. As of v1.5.0, Memory/Beliefs/Goals/Social/Faction all influence at least one Utility AI action; the residual gaps are in higher-level systems (lifecycle, world events) deferred to v2.0+. See `docs/integration_map.md` for the full data-source → consumer matrix.
 
-- `BeliefSystem` → consumed by `WalkToAction` (zone bias) and `AttackAction` (target valence) via `ActionContext.belief_score()`. Other actions still don't read beliefs.
+- `BeliefSystem` → consumed by `WalkToAction` (zone bias), `AttackAction` (target valence), `TradeAction` (target valence; success reinforces beliefs — B1), and `WorkAction` (workplace-safety belief about the home zone — B2) via `ActionContext.belief_score()`.
 - `NPCGoals` → consumed by every survival/behaviour action via `ActionContext.goal_bonus()` (+0.25 when the related goal is active).
-- `NPCMemory` → consumed by `WalkToAction` (zone threat bias via `get_memory_threat_bias()`). `SocializeAction.execute()` now writes a `Dialogue` event into the listener's memory, carrying the LLM-authored line.
-- `NPCSocial` → consumed by `SocializeAction.execute()` for trust-gated belief propagation (gossip retelling, attenuated valence/confidence).
+- `NPCMemory` → consumed by `WalkToAction` (zone threat bias via `get_memory_threat_bias()`). `SocializeAction.execute()` writes a `Dialogue` event into the listener's memory, carrying the LLM-authored line. `MemoryEntry.decay()` is multiplicative (v1.5.0+) so old salient memories preserve relative ordering forever.
+- `NPCSocial.relations` → consumed by `SocializeAction.execute()` for trust-gated belief propagation (gossip retelling, attenuated valence/confidence). LRU-capped at 200 with `<0.05` magnitude prune (v1.5.0+).
+- `NPCSocial.reputation` → consumed by `SocializeAction.evaluate()` (`+0.20 × (rep − 0.5)`) and `TradeAction.evaluate()` (`−0.30` when `rep < 0.3`) — B3.
+- `FactionRegistry.disposition` → consumed by `AttackAction` (boosts attack on enemy factions, suppresses on allied) and `SocializeAction` (mirror weights) via `ActionContext.faction_disposition()` — B4.
+- All five tracker polish bugs (#15, #16, #17, #18, #20) closed in v1.5.0; see `docs/bugs_and_issues.md`.
 
 ### DualLLMBackend Status
 
@@ -144,7 +162,7 @@ LLM only fires on: `threat ≥ 0.8` OR `HP drop ≥ 15`. All other ticks use Uti
 - `docs/architecture.md` — v2.0 Dual-LLM architecture, tick flow, extension points, "What NOT to Do"
 - `docs/llm_data_spec.md` — NPC JSON payload schema, Reasoner/Formatter data specs
 - `docs/dataset_training.md` — Dataset generation pipeline and training targets
-- `docs/bugs_and_issues.md` — Known issues and regression results (29 bugs tracked; v1.4.0 fixes #27, #28, #29 partial)
+- `docs/bugs_and_issues.md` — Known issues and regression results (29 bugs tracked; all closed by v1.5.0)
 - `docs/nextsteps.md` — **Yol haritası**: eksikler, v1.4/v1.5/v2.0/v3.0 görev listesi, LLM hedef şeması, dataset gereksinimleri
 - `docs/psychology_model.md` — Vitals decay, stress balance, emotion cross-inhibition, mood label algorithm (v1.4.0+)
 - `docs/integration_map.md` — Memory/Beliefs/Goals/Social/Traits → action consumer matrix (v1.4.0+)

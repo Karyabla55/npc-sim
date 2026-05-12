@@ -1,8 +1,13 @@
 # Psychology & Vitals Model
 
 **Status:** Authoritative reference for the vitals decay and emotion model.
-**Applies to:** v1.4.0 and later. Tuning values were calibrated against the
-6-sim-hour diagnostic run (`seed=42`, 5 archetypes).
+**Applies to:** v1.5.0 and later. v1.4.0 calibrated stress / anger / happiness
+balance against the 6-sim-hour diagnostic (`seed=42`, 5 archetypes); v1.5.0
+extended the stability story with multiplicative `MemoryEntry.decay()` (A5),
+bounded social/belief dicts (A2/A3), and the invariant safety net (A7) — see
+`CHANGELOG.md` v1.5.0 entry. The stress / mood numbers in §7 are still the
+v1.4.0 6-hour baseline; v1.5.0 30 sim-day strict runs hold them and observe
+mean stress drifting further down (≈ 0.10) once memory salience persists.
 
 This document is the single source of truth for how stress, anger, fear and
 happiness behave in NPC-Sim. If you change a coefficient here, also update the
@@ -151,9 +156,22 @@ explicitly in:
 - **Agreeableness** speeds anger decay.
 - **Extraversion** scales the happiness gain from `SocializeAction.execute()`.
 
-Named traits (`Brave`, `Coward`, `Pacifist`, `Aggressive`, `Devout`, …) live on
-`NPCTraits` and are consumed by individual actions, not by `NPCPsychology`. See
-`docs/integration_map.md` for the full trait → action map.
+Named traits (`Brave`, `Coward`, `Pacifist`, `Aggressive`, `Devout`, `Greedy`, …)
+live on `NPCTraits` and are consumed by individual actions, not by
+`NPCPsychology`. See `docs/integration_map.md` for the full trait → action map.
+
+**LLM trait coherence guard (H5).** v1.5.0+ extended the post-inference
+override in `LLMDecisionSystem._enforce_trait_coherence()` to five named
+traits: Brave (low fear + high threat → `attack`), Pacifist (never attack),
+Coward (threat ≥ 0.5 → `flee`), Greedy (gold-in-inventory + valid `trade` →
+`trade`), Devout (stress ≥ 0.6 + valid `pray` → `pray`). Each override
+appends an audit suffix to the LLM's reasoning string for diagnostics.
+
+**Memory decay (v1.5.0+).** `MemoryEntry.decay()` is multiplicative
+(`weight *= 1 - rate`), not additive — exponential approach to zero with
+sign preserved, so even decades-old salient events remain meaningfully
+larger than mundane ones. `get_most_salient()` keeps returning a sensible
+peak even after 100k decay ticks.
 
 ---
 

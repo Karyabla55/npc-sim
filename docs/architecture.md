@@ -18,6 +18,48 @@ If you are new to the codebase, start here. The table below tells you exactly wh
 | New action | `builtin.py` (new class) + `ActionLibrary` registration | `DecisionSystem`, `UtilityEvaluator`, `LLMDecisionSystem` |
 | New post-inference validation rule | `LLMDecisionSystem._enforce_trait_coherence()` | `_apply_pending()` logic flow |
 | New NPC psychological trait | `NPCTraits` + `get_weight_modifier()` + training data | Core action ontology |
+| New long-run invariant (v1.5.0+) | `npc_sim/diagnostics/invariants.py` (`check_invariants()` + a `_check_*` helper) | `run_diagnostic.py --strict` flag wiring (already generic) |
+
+---
+
+## Long-Run Stability Framework (v1.5.0)
+
+Three complementary mechanisms keep the simulation bounded over multi-day
+(years-of-sim) runs:
+
+1. **Bounded subsystems.** Mutable per-NPC collections that previously had no
+   cap now do: `NPCInventory` per-stack cap (`stack_cap=100`), `BeliefSystem`
+   LRU cap (`max_nodes=200`) + confidence-floor prune (`<0.05`), the
+   identical shape on `NPCSocial.relations`. `FactionRegistry.tick_decay`
+   removes a disposition once `|val| < 0.01` (was `1e-6`, never reached in
+   practice). `MemoryEntry.decay()` is multiplicative so old salient
+   memories stay distinguishable from mundane ones rather than all
+   collapsing to zero.
+
+2. **Bounded logging.** `SimLogger` rotates its CSV every
+   `rotate_every_rows=1_000_000` rows; the active file keeps the canonical
+   `sim_full.csv` name (so the notebook reload workflow works), older slabs
+   roll into `sim_full.NNNN.csv` archives.
+
+3. **Invariant assertion framework.** `npc_sim/diagnostics/invariants.py`
+   exposes `check_invariants(sim_manager) -> list[InvariantViolation]`
+   covering vital range + finiteness, emotion range, inventory cap, belief
+   cap, relation cap, and memory ring overflow. `run_diagnostic.py
+   --strict` runs the check every `--strict-every` ticks (default 1000)
+   and exits 2 on first violation, printing up to 20 violation records.
+   This is the "smoke alarm" — it doesn't fix problems, it catches the
+   moment they appear.
+
+Run-flag combinations:
+
+```bash
+# Long validation run with the safety net wired in
+python run_diagnostic.py --hours 720 --strict --strict-every 1000 --seed 42
+```
+
+When adding a new bounded structure or numeric field, register an invariant
+in `_check_*` so the safety net stays useful — the regression cost of an
+extra check is tiny (`check_invariants` is O(NPCs × subsystems)).
 
 ---
 

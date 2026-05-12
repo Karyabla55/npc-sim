@@ -1,7 +1,8 @@
 # Bug Tracker & Technical Debt
 
-**Document Created:** 2026-05-01  
-**Status:** Active  
+**Document Created:** 2026-05-01
+**Latest Update:** 2026-05-12 (v1.5.0 — all tracked bugs closed; 5 new long-run risks A1–A7 from the audit also closed)
+**Status:** Active
 **Priority Legend:** CRITICAL > HIGH > MEDIUM > LOW
 
 ---
@@ -335,13 +336,22 @@
 
 ## Summary by Category
 
-| Category | Count |
-|----------|-------|
-| CRITICAL | 9 |
-| HIGH | 9 |
-| MEDIUM | 6 |
-| LOW | 5 |
-| **Total** | **29** |
+| Category | Count | Open (as of v1.5.0) |
+|----------|-------|---------------------|
+| CRITICAL | 9 | 0 |
+| HIGH     | 9 | 0 |
+| MEDIUM   | 6 | 0 |
+| LOW      | 5 | 0 |
+| **Total** | **29** | **0** |
+
+All 29 tracked entries are now FIXED. The five v1.5.0 closures (#15, #16, #17, #18, #20) were the last LOW/MEDIUM polish backlog; the rest cleared in v1.2.0 → v1.4.0.
+
+**v1.5.0 also closed seven long-run-stability risks (A1–A7) that were not in
+this tracker:** unbounded inventory growth, BeliefSystem/Relation/Faction dict
+overflow, additive memory decay collapsing to zero, unbounded CSV log file,
+and the absence of an invariant safety net. See `CHANGELOG.md` v1.5.0 entry
+for the full list. They surfaced in the long-run audit, not from a bug
+report, so they are tracked there rather than re-numbered here.
 
 ### By Module
 
@@ -384,6 +394,33 @@ Bugs #27–#29 fixed; validated via 18,000-row CSV (5 archetypes, 6 sim-hours, s
 - **Mood "Calm" share**: 53 % → 75 %
 - **Conflicted mood**: 0 rows (cross-inhibition keeps the edge case out)
 - **Open issue**: NPCs bias toward `Work` and don't trigger `Eat`/`Drink`/`Socialize` within 6 h; the new stress-relief / belief-propagation pathways are present but rarely exercised. Tracked as action-selection tuning, not a regression.
+
+### v1.5.0 Diagnostic Results (2026-05-12)
+
+Tracker bugs #15, #16, #17, #18, #20 fixed. Seven long-run audit fixes
+(A1–A7) shipped alongside. Validated via three 30 sim-day `--strict` runs
+at the end of each phase (seed=42, 5 archetypes, 432,001 ticks each, ≈109 s
+real time):
+
+- **Survival**: 5/5 NPCs alive at sim-day 30; 0 deaths across all three runs
+- **Invariant violations**: 0 across vital range/finiteness, dict caps,
+  inventory cap, memory ring overflow (checked every 1000 ticks)
+- **Inventory cap**: Merchant gold saturates at exactly 100 (was unbounded);
+  no other stack ever exceeds the cap
+- **Dict bounds**: BeliefSystem and `NPCSocial.relations` per-NPC remain
+  ≤ 200; FactionRegistry stale dispositions reclaim once `|val| < 0.01`
+- **Mean stress**: ≈ 0.10 (down from 0.532 at v1.4.0 due to multiplicative
+  memory decay no longer collapsing salience to zero)
+- **Deterministic replay**: action distribution byte-identical across
+  Phase A / B / C 30-day runs (Work 94 869, Sleep 30 240, Gather 12 664,
+  Drink 8 100, Eat 6 000, Pray 5 402, WalkTo 2 730)
+- **Pytest suite**: 68 cases across 13 files (was 0 before v1.5.0)
+- **LLM queue preemption**: new `preempted` stat counts INTERRUPT-driven
+  cancellations of in-flight lower-priority requests (#18 closure)
+- **Open observation (not a regression)**: action distribution under the
+  default 5-NPC archetype mix doesn't exercise Trade/Attack/Socialize/Flee/
+  Heal; the new B1–B4 wirings are correct but unprovoked. A multi-faction
+  scenario with hostile percepts is needed to surface their effect.
 
 ---
 

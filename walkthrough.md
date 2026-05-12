@@ -1,3 +1,10 @@
+> **Note (2026-05-12):** This document is a historical snapshot of the
+> v1.0.1 + v1.2.0 diagnostic walkthroughs. For per-version changes since
+> then, see [`CHANGELOG.md`](CHANGELOG.md). For the v1.5.0 long-run
+> validation (30 sim-day `--strict` runs, 0 deaths, 0 invariant
+> violations, 68 pytest cases), see the v1.5.0 Diagnostic Results
+> section in [`docs/bugs_and_issues.md`](docs/bugs_and_issues.md).
+
 Walkthrough — NPC-Sim v1.2.0 Bugfix & API Release
 
 What Was Done

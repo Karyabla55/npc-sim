@@ -299,13 +299,58 @@ Aynı NPC'nin birden fazla gün boyunca tutarlı kişilik sergilemesi.
 
 ---
 
-### v1.5 — LLM Entegrasyonu (Öneri: 2-3 hafta)
+### v1.5.0 — Tamamlandı (2026-05-12)
+
+Risk-first triage: uzun-vade stabilite (Phase A) → entegrasyon boşlukları
+(Phase B) → tracker polish (Phase C). 17 atomik commit, 68 pytest case,
+3 × 30 sim-day `--strict` milestone.
+
+**Phase A — uzun-vade stabilite (audit'ten gelen, tracker dışı):**
+
+| Görev | Dosya | Açıklama |
+|-------|-------|----------|
+| A1 ✅ | `npc_sim/npc/inventory.py` | `NPCInventory.add()` `stack_cap=100` parametresi — WorkAction sınırsız üretim engellendi |
+| A2 ✅ | `npc_sim/npc/beliefs.py` | `BeliefSystem` LRU cap 200 + `<0.05` confidence prune |
+| A3 ✅ | `npc_sim/npc/social.py` | `NPCSocial.relations` aynı politika (LRU 200 + prune) |
+| A4 ✅ | `npc_sim/simulation/faction_registry.py` | Cleanup eşiği `1e-6` → `0.01` (fp drift'e takılan dispositions temizlenir) |
+| A5 ✅ | `npc_sim/npc/memory.py` | `MemoryEntry.decay()` additive → multiplicative — eski salient anılar göreceli ayırt edilebilir kalır |
+| A6 ✅ | `npc_sim/diagnostics/sim_logger.py` | `rotate_every_rows=1_000_000` — `sim_full.NNNN.csv` arşivleri |
+| A7 ✅ | `npc_sim/diagnostics/invariants.py` (YENİ) + `run_diagnostic.py --strict` | Vital range / NaN / dict cap / inventory cap / memory overflow safety net |
+
+**Phase B — entegrasyon boşlukları (`integration_map.md`):**
+
+| Görev | Dosya | Açıklama |
+|-------|-------|----------|
+| B1 ✅ | `npc_sim/decisions/actions/builtin.py` (TradeAction) | `evaluate()` `ctx.belief_score(target_id)` okur; başarılı trade çift yönlü belief reinforce eder |
+| B2 ✅ | `npc_sim/decisions/actions/builtin.py` (WorkAction) + `world_map.py` | Workplace-safety belief okur; yeni `WorldMap.get_home_zone_name()` |
+| B3 ✅ | `npc_sim/decisions/actions/builtin.py` (Socialize, Trade) | `target.social.reputation` Utility AI'a bağlandı |
+| B4 ✅ | `npc_sim/decisions/action_context.py` + `simulation_manager.py` + `builtin.py` (Attack, Socialize) | Yeni `ctx.faction_disposition(target_id)` helper'ı |
+
+**Phase C — tracker polish (5 pending bug):**
+
+| Görev | Bug | Dosya | Açıklama |
+|-------|-----|-------|----------|
+| C1 ✅ | #15 | `builtin.py` (WorkAction) | `yield_amount = max(1, int(efficiency * 2))` — efficiency artık miktarı etkiliyor |
+| C2 ✅ | #20 | `llm_decision_system.py` | Trait coherence Coward / Greedy / Devout için genişledi |
+| C3 ✅ | #17 | `sim_config.py` + 4 ek dosya | Kullanılmayan `llm_tick_every` field'ı kaldırıldı |
+| C4 ✅ | #18 | `llm_request_queue.py` | INTERRUPT in-flight lower-priority isteği `_cancelled` işaretler, callback short-circuit |
+| C5 ✅ | #16 | `docs/architecture.md` + `docs/llm_data_spec.md` | DualLLM "planned, not implemented" callout'ları eklendi |
+
+**Doğrulama (Phase A/B/C sonu, 30 sim-day `--strict` milestone, seed=42, 5 archetypes):**
+- 432 001 tick / 109 s real-time, 5/5 NPC sağ, 0 invariant violation
+- Mean stress ≈ 0.10 (v1.4.0'da 0.532 idi — multiplicative memory decay etkisi)
+- Action distribution deterministik replay (Phase A/B/C arasında bit-identical)
+- Inventory cap çalıştığı doğrulandı (Merchant gold doymuş, exact 100)
+
+---
+
+### v1.6+ — LLM Genişletme (Öneri: 2-3 hafta)
 
 | Görev | Dosya | Açıklama |
 |-------|-------|----------|
 | G7 | `npc_sim/llm/llm_decision_system.py` | `reasoning` sonucu NPC'nin kendi hafızasına `MemoryEntry` olarak ekle |
 | G8 | `npc_sim/llm/npc_serializer.py` | Sosyal kararlar için hedef NPC'nin özetini payload'a ekle (`target_context`) |
-| G9 | `npc_sim/llm/llm_backend.py` | `DualLLMBackend` implement et (Bug #16 kapatma) |
+| G9 | `npc_sim/llm/llm_backend.py` | `DualLLMBackend` implement et (Bug #16 doc kapatıldı; impl hâlâ planlı) |
 
 ---
 
@@ -470,20 +515,31 @@ scenario_negative_memory = {**scenario_base, "memories": [{"evt": "Betrayal", "d
   3. G6: Active goal → action skor bonusu
   4. Psikoloji stabilizasyon: stres ölçeklemesi + anger/happiness cross-inhibition
 
-Hemen (v1.5):
+✅ Tamamlandı (v1.5.0 — 2026-05-12):
+  1. A1–A7: uzun-vade stabilite (inventory cap, dict eviction, faction cleanup,
+            multiplicative memory decay, log rotation, invariant framework)
+  2. B1–B4: TradeAction beliefs + WorkAction zone safety + reputation reads +
+            faction disposition Utility AI
+  3. C1–C5: tracker polish (#15 work efficiency, #20 trait coherence, #17
+            llm_tick_every kaldırıldı, #18 queue preemption, #16 doc sync)
+  4. Test altyapısı: tests/ dizini (68 case) + run_diagnostic.py --strict
+
+Hemen (v1.6+):
   1. G7: LLM reasoning'i NPC hafızasına yaz
   2. G8: target_context payload eklemesi (sosyal kararlar)
-  3. G9: DualLLMBackend implement et (T5/Bug #16)
+  3. G9: DualLLMBackend implement et (Bug #16'nın kod tarafı)
   4. Action selection tuning: NPC'lerin Eat/Drink/Socialize'a yönelmesini sağla
+  5. Multi-faction senaryo: B4 faction-disposition wirmesini gerçek hostility
+     ile sahnelemek (mevcut diagnostic'te tetiklenmiyor)
 
 Kısa vadeli (v2.0 - 1. adım):
-  5. D1: ZoneState sistemi (resource miktarı)
-  6. D3: WorldEventSystem (periyodik olaylar)
-  7. D8: GossipSystem (G5'in genişletilmiş hali)
+  6. D1: ZoneState sistemi (resource miktarı)
+  7. D3: WorldEventSystem (periyodik olaylar)
+  8. D8: GossipSystem (G5'in genişletilmiş hali)
 
 Uzun vade (v3.0):
-  8. V1: NPC yaşam döngüsü
-  9. V6: Self-play dataset üretimi
+  9. V1: NPC yaşam döngüsü (birth/aging/death)
+ 10. V6: Self-play dataset üretimi
 ```
 
 ---

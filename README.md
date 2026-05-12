@@ -1,6 +1,6 @@
 # NPC-Sim
 
-**`npc_sim` · Version 1.1.0 · Python 3.10+**
+**`npc_sim` · Version 1.5.0 · Python 3.10+**
 
 > A **deterministic, civilization-scale NPC simulation framework** — originally conceived as a Unity package, now a fully standalone Python system with a local web dashboard and LLM-driven autonomous agent support.
 >
@@ -22,6 +22,17 @@ python server.py
 # Run headless 6-hour diagnostic (no Flask, no browser required)
 python run_diagnostic.py
 # → logs/sim_full.csv  (per-tick CSV log)
+
+# Run a 30 sim-day strict invariant validation (≈100s real time at default tick_rate)
+python run_diagnostic.py --hours 720 --strict --strict-every 1000 --seed 42
+# → exit code 2 (with violation listing) if any long-run invariant breaks
+```
+
+### Tests
+
+```bash
+pip install pytest                         # already in [dev] extras
+python -m pytest tests/ -q                # 68 cases as of v1.5.0
 ```
 
 ---
@@ -71,6 +82,13 @@ python run_diagnostic.py
 - Seeded `SimRng` (wraps `random.Random`)
 - `DictionaryGrid` for O(1) spatial queries
 
+### 🛡️ Long-Run Stability (v1.5.0)
+- **Bounded inventory** — `NPCInventory.add()` clamps every stack at `stack_cap=100` so a producer action can't grow it past the cap (instead of silently inflating forever)
+- **Bounded social/belief dicts** — `BeliefSystem` and `NPCSocial.relations` carry `max_nodes=200` LRU caps and prune entries below a `0.05` confidence/magnitude floor
+- **Bounded log files** — `SimLogger` rotates `sim_full.csv` → `sim_full.NNNN.csv` every `rotate_every_rows=1_000_000` rows
+- **Multiplicative memory decay** — `MemoryEntry.decay()` shrinks `emotional_weight` exponentially; old salient memories stay distinguishable from mundane ones over years of sim time
+- **Invariant assertion framework** — `npc_sim/diagnostics/invariants.py` plus `run_diagnostic.py --strict` validate vital range, NaN, dict caps, inventory caps, and memory ring overflow every N ticks (default 1000); exit code 2 on first violation
+
 ---
 
 ## Project Structure
@@ -82,10 +100,15 @@ npc_sim/
 ├── npc/           NPC, NPCFactory + 10 subsystems (vitals, psychology, memory, …)
 ├── perception/    PerceptionSystem, SensorRange, PerceptionFilter
 ├── decisions/     DecisionSystem, UtilityEvaluator, ActionLibrary + 12 built-in actions
-├── diagnostics/   SimLogger (per-tick CSV), VitalThresholdTracker
+├── diagnostics/   SimLogger (per-tick CSV, row-rotated), VitalThresholdTracker,
+│                  invariants (long-run safety net for --strict)
 ├── simulation/    SimulationManager, SimWorldAdapter, StimulusDispatcher, …
-└── llm/           WorldRegistry, NPCSerializer, OllamaBackend, LLMRequestQueue,
-                   LLMDecisionSystem
+└── llm/           WorldRegistry, NPCSerializer, OllamaBackend, LLMRequestQueue
+                   (interrupt-preempting), LLMDecisionSystem
+
+tests/             pytest suite — 68 cases across inventory cap, eviction, decay,
+                   rotation, invariants, action wiring, trait coherence, queue
+                   preemption, config hygiene
 
 Stateful_NPC/
 ├── generator/     npc_sim_generator_v2.py  (v4 dual-llm dataset generator)
@@ -95,8 +118,8 @@ Stateful_NPC/
                    train_formatter.jsonl (~12k examples)
 
 server.py          Flask + SocketIO backend
-run_diagnostic.py  Headless 6-hour sim runner + CSV log analyser
-logs/              sim_full.csv  (per-tick NPC diagnostic log, one row per NPC per tick)
+run_diagnostic.py  Headless sim runner + CSV log analyser; --strict for invariants
+logs/              sim_full.csv (active) + sim_full.NNNN.csv (rotated archives)
 static/            index.html, style.css, app.js  (web dashboard)
 ```
 
@@ -112,18 +135,26 @@ static/            index.html, style.css, app.js  (web dashboard)
 | `flee` | Safety | Moves NPC away from highest-threat percept |
 | `gather` | Survival | Harvests food/water based on need urgency; capped at 5 items per resource |
 | `heal` | Health | Consumes medicine; reduces fear |
-| `attack` | Combat | Melee damage + belief propagation + reputation penalty; eligible for Brave NPCs and any NPC that took ≥15% max-HP damage |
-| `socialize` | Social | Trust/affinity gain; gossips salient memory to ally |
-| `trade` | Economy | Gold ↔ food exchange; both parties gain trust |
-| `work` | Economy | Occupation-specific resource generation |
+| `attack` | Combat | Melee damage + belief propagation + reputation penalty + faction-disposition bias; eligible for Brave NPCs and any NPC that took ≥15% max-HP damage |
+| `socialize` | Social | Trust/affinity gain; gossips salient memory; reads target reputation + faction disposition |
+| `trade` | Economy | Gold ↔ food exchange; reads target belief valence + reputation; success reinforces beliefs |
+| `work` | Economy | Occupation-specific resource generation; yields scale with energy (`max(1, int(efficiency * 2))`); skipped when home zone has negative belief |
 | `pray` | Spiritual | Stress relief; emits Prayer social stimulus |
 | `walk_to` | Navigation | Goal-aware NPC movement; directed toward percepts when lacking resources |
 
 ---
 
-## LLM Integration (Dual-LLM Pipeline)
+## LLM Integration
 
-The `DualLLMBackend` splits reasoning and formatting across two specialized models:
+> **Status (v1.5.0):** runtime ships only `OllamaBackend` (single model) and
+> `MockBackend`. The asymmetric Reasoner + Formatter `DualLLMBackend` is
+> documented as the target design in `docs/architecture.md` and
+> `docs/llm_data_spec.md` and is scheduled for v1.5+ (roadmap task G9 in
+> `docs/nextsteps.md`). Treat the snippet below as the planned API, not the
+> currently-implemented one.
+
+The planned `DualLLMBackend` splits reasoning and formatting across two
+specialized models:
 
 ```python
 from npc_sim.core.sim_config import SimulationConfig
@@ -135,6 +166,18 @@ mgr = SimulationManager(SimulationConfig(
     llm_reasoner_model="npc-sim-reasoner:latest",  # 3B Model
     llm_formatter_url="http://localhost:11435",
     llm_formatter_model="npc-sim-formatter:latest",  # 1B Model
+))
+mgr.enable_llm_for_all()
+```
+
+The currently-shipping configuration uses a single `OllamaBackend`:
+
+```python
+mgr = SimulationManager(SimulationConfig(
+    llm_enabled=True,
+    llm_backend="ollama",
+    llm_model="hermes-lora",
+    ollama_base_url="http://localhost:11434",
 ))
 mgr.enable_llm_for_all()
 ```

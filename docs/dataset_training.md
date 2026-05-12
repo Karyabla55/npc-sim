@@ -4,6 +4,14 @@
 
 **Author:** Sadık Abdusselam Albayrak · **License:** Apache 2.0
 
+> **Implementation status (as of v1.5.0):** Bu dokuman'daki Dual-LLM
+> (Reasoner + Formatter) eğitim hattı **hedef mimari**dir; runtime'da
+> `npc_sim/llm/llm_backend.py` hâlâ yalnızca `OllamaBackend` (tek model) ve
+> `MockBackend` sağlar. Dataset üretimi (Reasoner CoT + Formatter JSON
+> çiftleri) zaten dual-LLM şeması için hazırlanır; `DualLLMBackend` v1.5+
+> yol haritasında G9 görevi olarak planlandı (bkz. `docs/nextsteps.md`).
+> Mevcut tek-model eğitiminde her iki dataset birleşik kullanılabilir.
+
 ---
 
 ## 📂 Versiyon Karşılaştırması
