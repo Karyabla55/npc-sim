@@ -31,6 +31,7 @@ def _make_ctx(belief_valence: float = 0.0, belief_confidence: float = 0.0,
     )
     ctx = SimpleNamespace(
         self_npc=npc,
+        world=None,
         belief_score=lambda subj: (
             npc_beliefs.nodes[subj].valence * npc_beliefs.nodes[subj].confidence
             if subj in npc_beliefs.nodes else 0.0

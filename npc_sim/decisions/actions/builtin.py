@@ -441,7 +441,15 @@ class SocializeAction(IAction):
     def evaluate(self, ctx: ActionContext) -> float:
         ext = ctx.self_npc.psychology.extraversion
         sched = ctx.self_npc.schedule.preference_at("social", ctx.sim_day_hour)
-        return min(1.0, ext * 0.5 + sched * 0.5 + ctx.goal_bonus(GoalType.SOCIALIZE))
+        score = ext * 0.5 + sched * 0.5 + ctx.goal_bonus(GoalType.SOCIALIZE)
+        # B3: reputation gate — well-regarded NPCs draw socializers,
+        # ill-regarded ones repel them.
+        ally = ctx.get_top_percept("Ally") or ctx.get_top_percept("NPC")
+        if ally and ctx.world:
+            target = ctx.world.get_npc_by_id(ally.object_id)
+            if target is not None and hasattr(target, "social"):
+                score += 0.20 * (target.social.reputation - 0.5)
+        return max(0.0, min(1.0, score))
 
     def execute(self, ctx: ActionContext) -> None:
         ally = ctx.get_top_percept("Ally") or ctx.get_top_percept("NPC")
@@ -529,6 +537,12 @@ class TradeAction(IAction):
                 score += 0.30 * belief
             elif belief > 0.0:
                 score += 0.15 * belief
+            # B3: refuse trades with the disreputable
+            if ctx.world:
+                target = ctx.world.get_npc_by_id(ally.object_id)
+                if target is not None and hasattr(target, "social"):
+                    if target.social.reputation < 0.3:
+                        score -= 0.30
         return max(0.0, min(1.0, score))
 
     def execute(self, ctx: ActionContext) -> None:

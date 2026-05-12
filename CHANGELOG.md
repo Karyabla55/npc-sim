@@ -13,6 +13,15 @@ strategy: invariant tests + per-fix 6h smoke + per-phase 30 sim-day milestone.
 
 ### Integration
 
+- **B3 — Reputation now reaches Utility AI** (`npc_sim/decisions/actions/builtin.py`):
+  `NPCSocial.reputation` was written by AttackAction but never read by the
+  decision layer. Wired it into two actions:
+  `SocializeAction.evaluate()` adds `0.20 × (target.reputation − 0.5)`
+  (well-regarded NPCs attract conversation; pariahs repel it); `TradeAction.
+  evaluate()` subtracts `0.30` when `target.reputation < 0.3` (refuse trades
+  with the disreputable). Score still clamps to [0, 1]. Covered by
+  `tests/test_reputation_reads.py` (3 cases).
+
 - **B2 — WorkAction reads workplace-safety belief**
   (`npc_sim/decisions/actions/builtin.py`, `npc_sim/simulation/world_map.py`):
   `WorkAction.evaluate()` ignored the NPC's beliefs about its own workplace,
