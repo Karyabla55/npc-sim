@@ -263,6 +263,63 @@ class LLMDecisionSystem:
                     latency_ms=resp.latency_ms,
                 )
 
+        # Coward: a perceived threat is always reason enough to flee.
+        if npc.traits.has("Coward") and resp.action_id != "flee":
+            threat = ctx.get_top_percept("Threat")
+            if threat and threat.threat_level >= 0.5:
+                resp = LLMResponse(
+                    npc_id=resp.npc_id,
+                    reasoning=resp.reasoning + " [Coward override: fleeing threat]",
+                    action_id="flee",
+                    target_id=threat.object_id,
+                    dialogue=resp.dialogue,
+                    emotion="Afraid",
+                    raw=resp.raw,
+                    latency_ms=resp.latency_ms,
+                )
+
+        # Greedy: when a valid trade with gold in hand is available, prefer it.
+        if npc.traits.has("Greedy") and resp.action_id != "trade":
+            trade_action = next(
+                (a for a in self._library.get_all() if a.action_id == "trade"),
+                None,
+            )
+            try:
+                from npc_sim.npc.inventory import ItemIds as _ItemIds
+                has_gold = npc.inventory.has(_ItemIds.GOLD)
+            except Exception:
+                has_gold = False
+            if trade_action and has_gold and trade_action.is_valid(ctx):
+                resp = LLMResponse(
+                    npc_id=resp.npc_id,
+                    reasoning=resp.reasoning + " [Greedy override: trading for gain]",
+                    action_id="trade",
+                    target_id=resp.target_id,
+                    dialogue=resp.dialogue,
+                    emotion=resp.emotion,
+                    raw=resp.raw,
+                    latency_ms=resp.latency_ms,
+                )
+
+        # Devout: chronic stress + valid prayer → pray for relief.
+        if npc.traits.has("Devout") and resp.action_id != "pray":
+            pray_action = next(
+                (a for a in self._library.get_all() if a.action_id == "pray"),
+                None,
+            )
+            if (pray_action and npc.vitals.stress >= 0.6
+                    and pray_action.is_valid(ctx)):
+                resp = LLMResponse(
+                    npc_id=resp.npc_id,
+                    reasoning=resp.reasoning + " [Devout override: seeking solace]",
+                    action_id="pray",
+                    target_id=None,
+                    dialogue=resp.dialogue,
+                    emotion="Calm",
+                    raw=resp.raw,
+                    latency_ms=resp.latency_ms,
+                )
+
         return resp
 
     # ── H4: Guided retry ──────────────────────────────────────────────────────

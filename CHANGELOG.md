@@ -13,6 +13,18 @@ strategy: invariant tests + per-fix 6h smoke + per-phase 30 sim-day milestone.
 
 ### Polish (tracker)
 
+- **C2 / #20 — Trait coherence expanded to Coward / Greedy / Devout**
+  (`npc_sim/llm/llm_decision_system.py`): `_enforce_trait_coherence` (H5)
+  only covered Brave (resist flee under low-fear high-threat) and Pacifist
+  (never attack). Added three more named-trait overrides for the LLM brain:
+  Coward + percept threat ≥ 0.5 → `flee`; Greedy + gold-in-inventory + valid
+  `trade` available → `trade`; Devout + stress ≥ 0.6 + valid `pray`
+  available → `pray`. Each override carries an audit suffix in the reasoning
+  field for diagnostics. Covered by `tests/test_trait_coherence.py` (7
+  cases): trigger paths + the negative invariants (no override below
+  threshold, no override when target action invalid, no override without
+  prerequisite resource).
+
 - **C1 / #15 — Work efficiency now reaches the yield**
   (`npc_sim/decisions/actions/builtin.py`): `WorkAction.execute()` computed
   `efficiency = max(0.05, energy_norm)` and used it only as the probability
