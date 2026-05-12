@@ -135,7 +135,6 @@ mgr = SimulationManager(SimulationConfig(
     llm_reasoner_model="npc-sim-reasoner:latest",  # 3B Model
     llm_formatter_url="http://localhost:11435",
     llm_formatter_model="npc-sim-formatter:latest",  # 1B Model
-    llm_tick_every=5,
 ))
 mgr.enable_llm_for_all()
 ```

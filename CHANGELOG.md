@@ -13,6 +13,17 @@ strategy: invariant tests + per-fix 6h smoke + per-phase 30 sim-day milestone.
 
 ### Polish (tracker)
 
+- **C3 / #17 — Removed unused `llm_tick_every` config**
+  (`npc_sim/core/sim_config.py`, `npc_sim/llm/llm_decision_system.py`,
+  `npc_sim/simulation/simulation_manager.py`, `README.md`,
+  `test_llm_smoke.py`): the field was set but never read — LLM cadence is
+  driven entirely by H2 interrupts. Its presence misled readers into
+  expecting periodic LLM calls. Dropped from `SimulationConfig`, from
+  the `LLMDecisionSystem.__init__` signature, from the constructor call
+  in `SimulationManager._ensure_llm_subsystems`, and from documentation.
+  Covered by `tests/test_config_no_llm_tick.py` (2 cases) which
+  guards against re-introduction.
+
 - **C2 / #20 — Trait coherence expanded to Coward / Greedy / Devout**
   (`npc_sim/llm/llm_decision_system.py`): `_enforce_trait_coherence` (H5)
   only covered Brave (resist flee under low-fear high-threat) and Pacifist

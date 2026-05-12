@@ -34,7 +34,6 @@ class LLMDecisionSystem:
     def __init__(self, library: ActionLibrary, backend: ILLMBackend,
                  queue: LLMRequestQueue, serializer: NPCSerializer,
                  evaluator: UtilityEvaluator = None,
-                 llm_tick_every: int = 5,
                  timeout_seconds: float = 3.0,
                  interrupt_threat_threshold: float = 0.8,
                  interrupt_hp_drop: float = 15.0):
@@ -46,7 +45,6 @@ class LLMDecisionSystem:
         self._evaluator = evaluator or UtilityEvaluator()
 
         # Config
-        self._llm_tick_every = llm_tick_every  # kept for API compat, no longer used
         self._timeout = timeout_seconds
         self._interrupt_threat = interrupt_threat_threshold
         self._interrupt_hp_drop = interrupt_hp_drop

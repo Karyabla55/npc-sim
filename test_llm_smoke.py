@@ -86,7 +86,7 @@ def t4():
     cfg = SimulationConfig()
     assert not cfg.llm_enabled
     assert cfg.llm_backend == "ollama"
-    assert cfg.llm_tick_every == 5
+    assert cfg.llm_timeout_seconds > 0
     print(f"    backend={cfg.llm_backend} model={cfg.llm_model}")
 check("SimConfig LLM fields", t4)
 

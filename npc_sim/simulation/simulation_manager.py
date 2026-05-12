@@ -117,7 +117,6 @@ class SimulationManager:
                 queue=self._llm_queue,
                 serializer=self._llm_serializer,
                 evaluator=self.evaluator,
-                llm_tick_every=self.config.llm_tick_every,
                 timeout_seconds=self.config.llm_timeout_seconds,
                 interrupt_threat_threshold=self.config.llm_interrupt_threat_threshold,
                 interrupt_hp_drop=self.config.llm_interrupt_hp_drop,
