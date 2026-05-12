@@ -13,6 +13,22 @@ strategy: invariant tests + per-fix 6h smoke + per-phase 30 sim-day milestone.
 
 ### Integration
 
+- **B4 — Faction disposition reaches Utility AI**
+  (`npc_sim/decisions/action_context.py`,
+  `npc_sim/decisions/actions/builtin.py`,
+  `npc_sim/simulation/simulation_manager.py`):
+  `FactionRegistry.get_disposition` was used by the LLM-facing serializer
+  but invisible to the every-tick Utility AI. Added
+  `ActionContext.faction_disposition(target_id)` which resolves both NPCs'
+  faction labels and looks up the registry — returning 0 when either side
+  has no faction, the two share a faction, the target is unresolvable, or
+  the registry isn't attached. SimulationManager injects the registry onto
+  the per-tick ctx the same way it already injects `_action_library`.
+  AttackAction adds up to `+0.30` against enemy factions / `−0.30` against
+  allied; SocializeAction adds up to `+0.20 × disp` for allies and
+  `+0.40 × disp` (i.e. up to `−0.40`) for enemies. Covered by
+  `tests/test_faction_disposition.py` (5 cases).
+
 - **B3 — Reputation now reaches Utility AI** (`npc_sim/decisions/actions/builtin.py`):
   `NPCSocial.reputation` was written by AttackAction but never read by the
   decision layer. Wired it into two actions:

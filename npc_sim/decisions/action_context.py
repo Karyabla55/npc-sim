@@ -89,6 +89,28 @@ class ActionContext:
         total_ew = sum(m.emotional_weight for m in relevant)
         return max(-1.0, min(total_ew / max(1, len(relevant)), 1.0))
 
+    # ── Faction helpers ──
+
+    def faction_disposition(self, target_id: str) -> float:
+        """Inter-faction disposition between self_npc and the named target.
+
+        Returns the registered value in [-1, +1] (0.0 if either side has no
+        faction, the two NPCs share a faction, the target can't be resolved,
+        or no FactionRegistry is attached). Used by AttackAction /
+        SocializeAction to bias toward enemies / allies (B4 integration).
+        """
+        fr = getattr(self, "_faction_registry", None)
+        if fr is None or not target_id or self.world is None:
+            return 0.0
+        target = self.world.get_npc_by_id(target_id)
+        if target is None:
+            return 0.0
+        self_fac = getattr(self.self_npc.identity, "faction", "") or ""
+        target_fac = getattr(target.identity, "faction", "") or ""
+        if not self_fac or not target_fac or self_fac == target_fac:
+            return 0.0
+        return fr.get_disposition(self_fac, target_fac)
+
     # ── Belief helpers ──
 
     def belief_score(self, subject: str) -> float:

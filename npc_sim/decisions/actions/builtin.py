@@ -372,14 +372,22 @@ class AttackAction(IAction):
         # Belief valence about the target: negative belief (= "this NPC is hostile")
         # boosts attack motivation; positive belief (= "ally") penalises it strongly.
         belief_mod = 0.0
+        faction_mod = 0.0
         if threat and threat.object_id:
             bs = ctx.belief_score(threat.object_id)
             if bs <= -0.3:
                 belief_mod = 0.25
             elif bs >= 0.3:
                 belief_mod = -0.40
+            # B4: faction disposition — enemy factions encourage attack,
+            # allied factions discourage it.
+            disp = ctx.faction_disposition(threat.object_id)
+            if disp < 0.0:
+                faction_mod = 0.30 * (-disp)
+            elif disp > 0.0:
+                faction_mod = -0.30 * disp
 
-        raw = ((anger * 0.4 + bravery * 0.6) + brave_boost + belief_mod) * trait_mod * goal_boost
+        raw = ((anger * 0.4 + bravery * 0.6) + brave_boost + belief_mod + faction_mod) * trait_mod * goal_boost
         return max(0.0, min(raw, 1.0))
 
     def execute(self, ctx: ActionContext) -> None:
@@ -442,13 +450,17 @@ class SocializeAction(IAction):
         ext = ctx.self_npc.psychology.extraversion
         sched = ctx.self_npc.schedule.preference_at("social", ctx.sim_day_hour)
         score = ext * 0.5 + sched * 0.5 + ctx.goal_bonus(GoalType.SOCIALIZE)
-        # B3: reputation gate — well-regarded NPCs draw socializers,
-        # ill-regarded ones repel them.
         ally = ctx.get_top_percept("Ally") or ctx.get_top_percept("NPC")
         if ally and ctx.world:
             target = ctx.world.get_npc_by_id(ally.object_id)
             if target is not None and hasattr(target, "social"):
                 score += 0.20 * (target.social.reputation - 0.5)
+            # B4: don't socialize across hostile faction lines.
+            disp = ctx.faction_disposition(ally.object_id)
+            if disp < 0.0:
+                score += 0.40 * disp
+            elif disp > 0.0:
+                score += 0.20 * disp
         return max(0.0, min(1.0, score))
 
     def execute(self, ctx: ActionContext) -> None:

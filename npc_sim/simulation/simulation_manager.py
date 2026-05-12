@@ -277,6 +277,7 @@ class SimulationManager:
                     day_length_seconds=self.config.day_length_seconds,
                 )
                 ctx._action_library = self.action_library
+                ctx._faction_registry = self.faction_registry
                 chosen_action = active_ds.tick(ctx)
                 if chosen_action:
                     action_name = chosen_action.action_type

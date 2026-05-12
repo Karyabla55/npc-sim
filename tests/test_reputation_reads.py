@@ -46,6 +46,7 @@ def _ctx(action_target_reputation: float | None, *, is_trade: bool = False):
         world=world,
         sim_day_hour=12.0,
         belief_score=lambda _s: 0.0,
+        faction_disposition=lambda _t: 0.0,
         goal_bonus=lambda _gt: 0.0,
         get_top_percept=lambda tag: ally if tag in ("Ally", "NPC") else None,
         has_percept=lambda tag: tag in ("Ally", "NPC"),
