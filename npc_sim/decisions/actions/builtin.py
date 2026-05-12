@@ -521,7 +521,15 @@ class TradeAction(IAction):
 
     def evaluate(self, ctx: ActionContext) -> float:
         trait_mod = ctx.self_npc.traits.get_weight_modifier(self.action_type)
-        return min(1.0, 0.4 * trait_mod + ctx.goal_bonus(GoalType.TRADE))
+        score = 0.4 * trait_mod + ctx.goal_bonus(GoalType.TRADE)
+        ally = ctx.get_top_percept("Ally") or ctx.get_top_percept("NPC")
+        if ally:
+            belief = ctx.belief_score(ally.object_id)
+            if belief < 0.0:
+                score += 0.30 * belief
+            elif belief > 0.0:
+                score += 0.15 * belief
+        return max(0.0, min(1.0, score))
 
     def execute(self, ctx: ActionContext) -> None:
         ally = ctx.get_top_percept("Ally") or ctx.get_top_percept("NPC")
@@ -529,6 +537,7 @@ class TradeAction(IAction):
             return
         target = ctx.world.get_npc_by_id(ally.object_id)
         npc = ctx.self_npc
+        traded = False
         if target and npc.inventory.has(ItemIds.GOLD) and target.inventory.has(ItemIds.FOOD):
             npc.inventory.remove(ItemIds.GOLD, 1)
             target.inventory.add(ItemIds.GOLD, 1)
@@ -536,11 +545,16 @@ class TradeAction(IAction):
             npc.inventory.add(ItemIds.FOOD, 1)
             npc.interact(target, 0.05, 0.03, 0.03, ctx.current_time)
             target.interact(npc, 0.05, 0.03, 0.03, ctx.current_time)
-        ctx.world.publish_event(SimEvent(
+            traded = True
+        trade_event = SimEvent(
             self.action_type, npc.identity.npc_id,
             ally.object_id if ally else None,
             f"{npc.identity.display_name} trades.",
-            0.25, ctx.current_time, npc.position, ctx.rng, "economy"))
+            0.25 if traded else 0.05, ctx.current_time, npc.position, ctx.rng, "economy")
+        if traded and target:
+            npc.witness_event(trade_event, [target.identity.npc_id], ctx.current_time)
+            target.witness_event(trade_event, [npc.identity.npc_id], ctx.current_time)
+        ctx.world.publish_event(trade_event)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

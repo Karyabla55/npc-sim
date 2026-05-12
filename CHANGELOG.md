@@ -11,6 +11,18 @@ Risk-first triage of the long-run stability audit (Phase A), then integration
 gap closure (Phase B), then 5 pending tracker bugs (Phase C). Validation
 strategy: invariant tests + per-fix 6h smoke + per-phase 30 sim-day milestone.
 
+### Integration
+
+- **B1 — TradeAction reads target belief valence**
+  (`npc_sim/decisions/actions/builtin.py`): trade scoring previously ignored
+  what the NPC knew about the potential partner. `evaluate()` now consults
+  `ctx.belief_score(target_id)`: negative beliefs drop the score by up to
+  −0.30 (deterring trades with known cheaters), positive beliefs raise it
+  by up to +0.15 (favoring trusted partners). Successful trades emit a
+  positive (`impact=+0.25`) `Trade` event that both NPCs witness with each
+  other as the belief subject, so trust compounds over repeated successful
+  trades. Covered by `tests/test_trade_beliefs.py` (4 cases).
+
 ### Fixed
 
 - **A1 — Inventory unbounded growth** (`npc_sim/npc/inventory.py`):
