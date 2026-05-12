@@ -20,7 +20,7 @@ from typing import Callable, Optional
 class LLMRequest:
     """A single queued LLM call."""
     __slots__ = ("priority", "npc_id", "payload_json", "timeout",
-                 "callback", "_seq")
+                 "callback", "_seq", "_cancelled")
 
     # sequence counter for stable heap ordering (same priority → FIFO)
     _counter = 0
@@ -33,6 +33,7 @@ class LLMRequest:
         self.priority = priority
         self.timeout = timeout
         self.callback = callback
+        self._cancelled = False
         with LLMRequest._lock:
             LLMRequest._counter += 1
             self._seq = LLMRequest._counter
@@ -68,13 +69,14 @@ class LLMRequestQueue:
         self._max_queue = max_queue_size
         self._heap: list[LLMRequest] = []
         self._heap_lock = threading.Condition()
+        self._in_flight: list[LLMRequest] = []
         self._executor = ThreadPoolExecutor(
             max_workers=max_concurrent,
             thread_name_prefix="llm_worker"
         )
         self._stats = {
             "submitted": 0, "executed": 0, "dropped": 0,
-            "errors": 0, "total_latency_ms": 0.0,
+            "errors": 0, "preempted": 0, "total_latency_ms": 0.0,
         }
         self._stats_lock = threading.Lock()
         self._worker_future: Optional[Future] = None
@@ -101,6 +103,19 @@ class LLMRequestQueue:
             heapq.heappush(self._heap, req)
             with self._stats_lock:
                 self._stats["submitted"] += 1
+            # #18: preempt any in-flight lower-priority work when an interrupt
+            # arrives. The HTTP call cannot be killed cross-thread, but its
+            # callback short-circuits to (None, None) so the NPC doesn't apply
+            # a stale response over an interrupt path.
+            if priority <= Priority.INTERRUPT:
+                preempted = 0
+                for cur in self._in_flight:
+                    if cur.priority > priority and not cur._cancelled:
+                        cur._cancelled = True
+                        preempted += 1
+                if preempted:
+                    with self._stats_lock:
+                        self._stats["preempted"] += preempted
             self._heap_lock.notify()
         return True
 
@@ -136,6 +151,8 @@ class LLMRequestQueue:
         return None
 
     def _execute(self, req: LLMRequest) -> None:
+        with self._heap_lock:
+            self._in_flight.append(req)
         t0 = time.perf_counter()
         try:
             response = self._backend.call(req.npc_id, req.payload_json, req.timeout)
@@ -143,11 +160,20 @@ class LLMRequestQueue:
             with self._stats_lock:
                 self._stats["executed"] += 1
                 self._stats["total_latency_ms"] += latency
-            req.callback(response, None)
+            if req._cancelled:
+                req.callback(None, None)
+            else:
+                req.callback(response, None)
         except Exception as e:
             with self._stats_lock:
                 self._stats["errors"] += 1
             req.callback(None, e)
+        finally:
+            with self._heap_lock:
+                try:
+                    self._in_flight.remove(req)
+                except ValueError:
+                    pass
 
     def __repr__(self) -> str:
         s = self.get_stats()

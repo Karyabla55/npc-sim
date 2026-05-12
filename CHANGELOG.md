@@ -13,6 +13,21 @@ strategy: invariant tests + per-fix 6h smoke + per-phase 30 sim-day milestone.
 
 ### Polish (tracker)
 
+- **C4 / #18 — Interrupt preempts in-flight LLM requests**
+  (`npc_sim/llm/llm_request_queue.py`): the priority heap correctly
+  ordered _pending_ work, but once a normal/background request was
+  pulled into the worker thread, an arriving interrupt had to wait for
+  it to finish — defeating H2's purpose of "react fast." Threads can't
+  be killed cross-thread safely, but their callbacks can: `LLMRequest`
+  now carries a `_cancelled` flag, the queue tracks `_in_flight`
+  workers, and `submit()` of an `INTERRUPT`-priority request marks any
+  currently-running lower-priority request as cancelled. `_execute()`
+  short-circuits the callback to `(None, None)` so the NPC won't apply
+  a stale response on the interrupt path; the HTTP call itself still
+  completes and the worker is then free to pull the interrupt off the
+  heap. New `preempted` stat counts these events. Covered by
+  `tests/test_queue_preemption.py` (3 cases).
+
 - **C3 / #17 — Removed unused `llm_tick_every` config**
   (`npc_sim/core/sim_config.py`, `npc_sim/llm/llm_decision_system.py`,
   `npc_sim/simulation/simulation_manager.py`, `README.md`,
