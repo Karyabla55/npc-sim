@@ -5,11 +5,29 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [Unreleased] — v1.5.0 (long-run stability + integration + polish)
+## [1.5.0] — 2026-05-12 (long-run stability + integration + polish)
 
-Risk-first triage of the long-run stability audit (Phase A), then integration
-gap closure (Phase B), then 5 pending tracker bugs (Phase C). Validation
-strategy: invariant tests + per-fix 6h smoke + per-phase 30 sim-day milestone.
+Risk-first triage of the long-run stability audit (Phase A: A1–A7), then
+integration gap closure (Phase B: B1–B4), then the 5 pending tracker bugs
+(Phase C: C1–C5 / #15-#18, #20). Three 30 sim-day milestones, every fix
+covered by an invariant test, every commit gated by a 6h `--strict`
+diagnostic.
+
+**Phase A & B & C milestones — 30 sim-day strict diagnostic, seed=42, 5
+archetypes:**
+
+| Metric                       | v1.4.0 (6h) | v1.5.0 (30d) |
+|------------------------------|-------------|--------------|
+| Ticks                        | 3,600       | 432,001      |
+| Real time                    | 0.8 s       | 109 s        |
+| Survivors                    | 5/5         | 5/5          |
+| Invariant violations         | n/a         | 0            |
+| Mean stress                  | 0.532       | ≈0.10        |
+| Inventory growth bounded     | no          | yes (cap=100)|
+| Belief/relation dict bounded | no          | yes (cap=200)|
+| CSV rotation                 | no          | every 1M rows|
+| pytest suite                 | none        | 68 cases     |
+
 
 ### Polish (tracker)
 

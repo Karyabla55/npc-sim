@@ -261,7 +261,7 @@
 | **Issue** | `efficiency` variable computed and logged but never affects `WorkAction.execute()` output. Resource generation should scale with energy. |
 | **Impact** | Work action produces same output regardless of NPC energy level. |
 | **Fix** | Pass efficiency to WorkAction or compute resource generation in SimulationManager. |
-| **Status** | PENDING |
+| **Status** | **FIXED — v1.5.0 (C1)** · `WorkAction.execute()` now uses `yield_amount = max(1, int(efficiency * 2))`; full-energy NPCs produce +2 per tick, depleted ones floor at +1. |
 
 ---
 
@@ -285,7 +285,7 @@
 | **Issue** | Architecture doc describes `DualLLMBackend` with Reasoner (3B) + Formatter (1B) components. No such class exists in `npc_sim/llm/`. Only `OllamaBackend` is implemented. |
 | **Impact** | Contributors will be confused. Documentation credibility受损. |
 | **Fix** | Either implement `DualLLMBackend` class OR remove/archive the Dual-LLM section with a note. |
-| **Status** | PENDING |
+| **Status** | **FIXED — v1.5.0 (C5)** · `docs/architecture.md` and `docs/llm_data_spec.md` now carry an "Implementation status" callout at the top of their dual-LLM sections, pointing readers to roadmap task G9. Implementation deferred to v1.5 → v2.0. |
 
 ---
 
@@ -296,7 +296,7 @@
 | **Issue** | `llm_tick_every: int = 5` is set but never read. `LLMDecisionSystem` only fires on interrupt (H2). Per docs, tick counter was "deliberately removed". |
 | **Impact** | Dead configuration. Confuses users expecting periodic LLM calls. |
 | **Fix** | Remove config field or restore tick-based calling as optional mode. |
-| **Status** | PENDING |
+| **Status** | **FIXED — v1.5.0 (C3)** · Field dropped from `SimulationConfig` and from the `LLMDecisionSystem.__init__` signature; constructor call in `SimulationManager._ensure_llm_subsystems` cleaned up; README + smoke test updated. Regression-guarded by `tests/test_config_no_llm_tick.py`. |
 
 ---
 
@@ -307,7 +307,7 @@
 | **Issue** | `max_concurrent=1` means even `INTERRUPT` priority (0) waits for any in-flight request to complete. A `BACKGROUND` (10) request that started first blocks an interrupt. |
 | **Impact** | High-priority interrupts delayed by low-priority background processing. |
 | **Fix** | Implement preemption: cancel lowest-priority in-flight request when INTERRUPT arrives. |
-| **Status** | PENDING |
+| **Status** | **FIXED — v1.5.0 (C4)** · `LLMRequest` carries a `_cancelled` flag, `LLMRequestQueue` tracks `_in_flight` workers, and `submit()` of an `INTERRUPT`-priority request marks lower-priority running requests as cancelled. `_execute()` short-circuits the cancelled callback to `(None, None)`. New `preempted` stat counts events. Covered by `tests/test_queue_preemption.py`. |
 
 ---
 
@@ -329,7 +329,7 @@
 | **Issue** | Only `flee→attack` (Brave) and `attack→flee` (Pacifist) are handled. Docs mention `Devout→pray`, `Greedy→hoard`, `Aggressive→attack` but these aren't implemented. |
 | **Impact** | Trait incoherence bugs for unhandled traits. |
 | **Fix** | Add remaining trait coherence rules or remove from documentation. |
-| **Status** | PENDING |
+| **Status** | **FIXED — v1.5.0 (C2)** · `_enforce_trait_coherence` now also overrides for Coward (threat ≥ 0.5 → flee), Greedy (gold + valid trade → trade), and Devout (stress ≥ 0.6 + valid pray → pray). Each override appends a diagnostic suffix to the reasoning field. Covered by `tests/test_trait_coherence.py`. |
 
 ---
 
