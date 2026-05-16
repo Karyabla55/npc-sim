@@ -86,7 +86,7 @@ def test_no_preemption_when_only_low_priority_in_flight():
 
 def test_request_carries_cancelled_flag():
     from npc_sim.llm.llm_request_queue import LLMRequest
-    req = LLMRequest("a", "{}", 5, 1.0, lambda _r, _e: None)
+    req = LLMRequest("a", "{}", 5, 1.0, lambda _r, _e: None, seq=1)
     assert req._cancelled is False
     req._cancelled = True
     assert req._cancelled is True

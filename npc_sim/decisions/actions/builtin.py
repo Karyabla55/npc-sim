@@ -1,6 +1,6 @@
 # Copyright 2025-2026 Sadık Abdusselam Albayrak
 # Licensed under the Apache License, Version 2.0
-"""All 11 built-in NPC actions for the utility AI system."""
+"""All 12 built-in NPC actions for the utility AI system."""
 
 from __future__ import annotations
 from npc_sim.decisions.action import IAction
@@ -17,6 +17,11 @@ def _vital_interrupt(ctx: ActionContext) -> bool:
     """Break a long-duration lock when vitals become life-threatening."""
     v = ctx.self_npc.vitals
     return v.thirst >= 0.85 or v.hunger >= 0.85 or v.health <= v.max_health * 0.25
+
+
+# Single source of truth for the consumable (FOOD / WATER) per-NPC cap.
+# Durable goods (GRAIN, GOLD, TOOLS) still use Inventory.add()'s default 100.
+MAX_CONSUMABLE_STACK = 5
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -225,13 +230,19 @@ class GatherAction(IAction):
     def create_lock(self) -> ActionLock:
         def exit_cond(ctx):
             v, inv = ctx.self_npc.vitals, ctx.self_npc.inventory
-            # Exit if inventory full or needs are met
+            # Exit if BOTH stacks are full (single Gather session fills both) or
+            # needs are met. Previously OR meant filling food but no water still
+            # exited the lock, wasting a re-entry.
             needs_met = v.hunger < 0.3 and v.thirst < 0.3
-            inv_full = (inv.get_amount(ItemIds.FOOD) >= 5 or inv.get_amount(ItemIds.WATER) >= 5)
-            # Actually, the prompt says: exit=inv>=5 OR need<0.3
+            inv_full = (inv.get_amount(ItemIds.FOOD) >= 5 and inv.get_amount(ItemIds.WATER) >= 5)
             return inv_full or needs_met
 
-        return ActionLock(self.action_id, 120.0, exit_cond, interrupt_allowed=True)
+        # 30 s lock keeps NPC on-task long enough to fill a few stacks without
+        # locking out vital interrupts. `_vital_interrupt` lets thirst/hunger
+        # ≥ 0.85 break the lock immediately even before min_duration.
+        return ActionLock(self.action_id, 30.0, exit_cond,
+                          interrupt_allowed=True,
+                          interrupt_predicate=_vital_interrupt)
 
     def is_valid(self, ctx: ActionContext) -> bool:
         v = ctx.self_npc.vitals
@@ -263,24 +274,23 @@ class GatherAction(IAction):
     def execute(self, ctx: ActionContext) -> None:
         v = ctx.self_npc.vitals
         inv = ctx.self_npc.inventory
-        _CAP = 5
-        food_full = inv.get_amount(ItemIds.FOOD) >= _CAP
-        water_full = inv.get_amount(ItemIds.WATER) >= _CAP
+        food_full = inv.get_amount(ItemIds.FOOD) >= MAX_CONSUMABLE_STACK
+        water_full = inv.get_amount(ItemIds.WATER) >= MAX_CONSUMABLE_STACK
         if food_full and water_full:
             return
         if v.hunger >= v.thirst:
             if not food_full:
-                inv.add(ItemIds.FOOD, 1)
+                inv.add(ItemIds.FOOD, 1, stack_cap=MAX_CONSUMABLE_STACK)
                 resource = "food"
             else:
-                inv.add(ItemIds.WATER, 1)
+                inv.add(ItemIds.WATER, 1, stack_cap=MAX_CONSUMABLE_STACK)
                 resource = "water"
         else:
             if not water_full:
-                inv.add(ItemIds.WATER, 1)
+                inv.add(ItemIds.WATER, 1, stack_cap=MAX_CONSUMABLE_STACK)
                 resource = "water"
             else:
-                inv.add(ItemIds.FOOD, 1)
+                inv.add(ItemIds.FOOD, 1, stack_cap=MAX_CONSUMABLE_STACK)
                 resource = "food"
         v.consume_energy(3.0 * ctx.delta_time)
         if ctx.world:
@@ -568,7 +578,9 @@ class TradeAction(IAction):
             npc.inventory.remove(ItemIds.GOLD, 1)
             target.inventory.add(ItemIds.GOLD, 1)
             target.inventory.remove(ItemIds.FOOD, 1)
-            npc.inventory.add(ItemIds.FOOD, 1)
+            # Consumables stay under the same 5-cap that Gather enforces, so a
+            # Merchant cannot accumulate 100 food via repeated trades.
+            npc.inventory.add(ItemIds.FOOD, 1, stack_cap=MAX_CONSUMABLE_STACK)
             npc.interact(target, 0.05, 0.03, 0.03, ctx.current_time)
             target.interact(npc, 0.05, 0.03, 0.03, ctx.current_time)
             traded = True
@@ -592,7 +604,10 @@ class WorkAction(IAction):
     action_type = "Work"
 
     def create_lock(self) -> ActionLock:
-        return ActionLock(self.action_id, 1800.0,
+        # 480 sim-seconds = 8 sim-hour shift in the 1440-sec day. The prior 1800 value
+        # was sized for an 86400-sec real-world day; bug #23 fixed SleepAction at
+        # v1.3.0 but left WorkAction misscaled.
+        return ActionLock(self.action_id, 480.0,
                           lambda ctx: not self.is_valid(ctx) or ctx.self_npc.schedule.preference_at("work", ctx.sim_day_hour) < 0.2,
                           interrupt_allowed=True,
                           interrupt_predicate=_vital_interrupt)
@@ -679,7 +694,9 @@ class PrayAction(IAction):
     def execute(self, ctx: ActionContext) -> None:
         npc = ctx.self_npc
         npc.vitals.set_stress(max(0.0, npc.vitals.stress - 0.1 * ctx.delta_time))
-        npc.psychology.set_happiness(min(1.0, npc.psychology.happiness + 0.03))
+        # Scaled by delta_time — the 600 s prayer lock re-invokes execute() per tick;
+        # without scaling, happiness saturated to 1.0 in ~3.4 sim-seconds.
+        npc.psychology.set_happiness(min(1.0, npc.psychology.happiness + 0.03 * ctx.delta_time))
         if ctx.world:
             ctx.world.publish_stimulus_from_action(
                 npc.identity.npc_id, npc.position, "Social", "Prayer", 0.3, ctx.current_time)

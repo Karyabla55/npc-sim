@@ -6,7 +6,6 @@ from __future__ import annotations
 from npc_sim.decisions.action import IAction
 from npc_sim.decisions.action_library import ActionLibrary
 from npc_sim.decisions.action_context import ActionContext
-from npc_sim.decisions.action_context import ActionContext
 from npc_sim.decisions.utility_evaluator import UtilityEvaluator
 from npc_sim.decisions.action_lock import ActionLock
 
@@ -46,8 +45,13 @@ class DecisionSystem:
         if self._active_lock:
             self._lock_elapsed += ctx.delta_time
 
-            if hard_interrupt and self._active_lock.interrupt_allowed:
-                self._active_lock = None  # Lock broken by interrupt
+            # Life-threatening conditions (threat ≥ 0.8, HP ≤ 25 %, thirst/hunger
+            # ≥ 0.85) preempt every lock, including the short-duration ones that
+            # set interrupt_allowed=False (Eat, Drink, Heal, Attack, Flee). The
+            # earlier conjunction with `interrupt_allowed` meant Heal/Attack
+            # could not be broken by a new threat.
+            if hard_interrupt:
+                self._active_lock = None  # Lock broken by hard interrupt
             else:
                 if self._lock_elapsed < self._active_lock.min_duration_sim_seconds:
                     pred = self._active_lock.interrupt_predicate

@@ -57,7 +57,6 @@ class LLMDecisionSystem:
 
         # Last LLM result (applied next tick if arrived)
         self._pending_response: LLMResponse | None = None
-        self._pending_action_id: str | None = None
 
         # Diagnostics
         self.llm_call_count: int = 0
@@ -177,11 +176,10 @@ class LLMDecisionSystem:
     # ── Response callback (runs in worker thread) ──────────────────────────────
 
     def _on_response(self, response: LLMResponse | None, error: Exception | None) -> None:
-        with self._pending_lock:
-            self._pending = False
-
         if error is not None or response is None:
-            # Failed — will fallback next tick
+            # Failed — clear pending flag and bail; will fallback next tick.
+            with self._pending_lock:
+                self._pending = False
             return
 
         # Validate action_id is in library
@@ -190,18 +188,26 @@ class LLMDecisionSystem:
             # H4: guided retry
             corrected = self._guided_retry(response)
             if corrected is None:
+                with self._pending_lock:
+                    self._pending = False
                 return   # fallback
             response = corrected
 
-        self._pending_response = response
+        # Publish the response and clear the in-flight flag under the same lock
+        # so a future multi-worker setup cannot interleave a stale write between
+        # the response store and the flag flip.
+        with self._pending_lock:
+            self._pending_response = response
+            self._pending = False
 
     # ── Apply pending response ─────────────────────────────────────────────────
 
     def _apply_pending(self, ctx: ActionContext) -> IAction | None:
-        resp = self._pending_response
+        with self._pending_lock:
+            resp = self._pending_response
+            self._pending_response = None
         if resp is None:
             return None
-        self._pending_response = None
 
         # H5: Trait coherence guard — override logically contradictory LLM decisions
         resp = self._enforce_trait_coherence(resp, ctx)

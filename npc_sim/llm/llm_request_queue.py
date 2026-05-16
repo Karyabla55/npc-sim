@@ -18,25 +18,19 @@ from typing import Callable, Optional
 
 
 class LLMRequest:
-    """A single queued LLM call."""
+    """A single queued LLM call. `_seq` is assigned by the owning queue."""
     __slots__ = ("priority", "npc_id", "payload_json", "timeout",
                  "callback", "_seq", "_cancelled")
 
-    # sequence counter for stable heap ordering (same priority → FIFO)
-    _counter = 0
-    _lock = threading.Lock()
-
     def __init__(self, npc_id: str, payload_json: str, priority: int,
-                 timeout: float, callback: Callable):
+                 timeout: float, callback: Callable, seq: int):
         self.npc_id = npc_id
         self.payload_json = payload_json
         self.priority = priority
         self.timeout = timeout
         self.callback = callback
         self._cancelled = False
-        with LLMRequest._lock:
-            LLMRequest._counter += 1
-            self._seq = LLMRequest._counter
+        self._seq = seq
 
     def __lt__(self, other):
         if self.priority != other.priority:
@@ -70,6 +64,10 @@ class LLMRequestQueue:
         self._heap: list[LLMRequest] = []
         self._heap_lock = threading.Condition()
         self._in_flight: list[LLMRequest] = []
+        # Per-queue monotonic sequence so tie-breaks within a priority bucket
+        # are deterministic per-run (was previously class-level, leaked across
+        # SimulationManager instances in the same Python process).
+        self._next_seq = 0
         self._executor = ThreadPoolExecutor(
             max_workers=max_concurrent,
             thread_name_prefix="llm_worker"
@@ -99,7 +97,9 @@ class LLMRequestQueue:
                 with self._stats_lock:
                     self._stats["dropped"] += 1
                 return False
-            req = LLMRequest(npc_id, payload_json, priority, timeout, callback)
+            self._next_seq += 1
+            req = LLMRequest(npc_id, payload_json, priority, timeout, callback,
+                             seq=self._next_seq)
             heapq.heappush(self._heap, req)
             with self._stats_lock:
                 self._stats["submitted"] += 1
@@ -143,12 +143,6 @@ class LLMRequestQueue:
                 req = heapq.heappop(self._heap) if self._heap else None
             if req is not None:
                 self._executor.submit(self._execute, req)
-
-    def _pop_highest(self) -> Optional[LLMRequest]:
-        with self._heap_lock:
-            if self._heap:
-                return heapq.heappop(self._heap)
-        return None
 
     def _execute(self, req: LLMRequest) -> None:
         with self._heap_lock:

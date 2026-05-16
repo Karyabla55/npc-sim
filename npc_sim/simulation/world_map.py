@@ -21,7 +21,14 @@ class WorldMap:
 
     @classmethod
     def get_zone(cls, name: str) -> SimVector3:
-        return cls.ZONES.get(name, cls.ZONES["Town Square"])
+        # Unknown zone names degrade to Town Square so a typo elsewhere doesn't
+        # crash the sim, but log a warning so the typo doesn't stay invisible.
+        if name not in cls.ZONES:
+            import sys
+            print(f"[WorldMap] unknown zone '{name}', falling back to Town Square",
+                  file=sys.stderr)
+            return cls.ZONES["Town Square"]
+        return cls.ZONES[name]
     
     OCCUPATION_HOME_ZONE: dict[str, str] = {
         "farmer": "Farm",

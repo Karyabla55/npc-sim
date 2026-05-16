@@ -5,6 +5,119 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.5.1] — 2026-05-16 (post-v1.5.0 audit sweep)
+
+Wide audit across all modules for new/untracked bugs after v1.5.0 shipped.
+Three Explore agents surfaced ~47 candidate issues; 18 were real and
+untracked. **All 18 closed in this release.** Test suite stays at 68/68
+PASS; 30-day `--strict` run reproduced (5/5 alive, 432,001 ticks, 0
+invariant violations, 2.16M CSV rows clean).
+
+### Critical
+
+- **C1 — Bogus regex `espo\w*` ate legitimate LLM output**
+  (`npc_sim/llm/llm_backend.py`): the EOS sanitizer regex had a fourth
+  alternation `espo\w*` (likely a corrupted `<\|respo...` token) that
+  matched any word starting with "espo" and stripped it. Turkish CoT
+  containing "espresso"/"espouse" would have JSON corrupted. Removed the
+  alternation; regex now strips only the three real EOS variants.
+
+### High
+
+- **H1 — `PrayAction` happiness gain not scaled by `delta_time`**
+  (`npc_sim/decisions/actions/builtin.py`): `set_happiness(... + 0.03)`
+  saturated to 1.0 in 34 ticks of a 6000-tick Pray lock. Matches the
+  pattern in `SocializeAction`/`FleeAction`/`AttackAction`; restores
+  v1.4.0 psychology coherence.
+- **H2 — `WorkAction.min_duration` 1800.0 → 480.0**
+  (`npc_sim/decisions/actions/builtin.py`): finishes the work-lock
+  rescaling started in v1.3.0 #23 (SleepAction was updated then, WorkAction
+  was not). 1800 sim-seconds was 1.25 sim-days in a 1440-sec day —
+  longer than a day. 480s = an 8-hour shift, matching SleepAction.
+- **H3 — Removed dead method `_pop_highest()`**
+  (`npc_sim/llm/llm_request_queue.py`): orphan from the v1.2.0 race-fix
+  redesign; `_dispatch_loop` uses `heapq.heappop` directly.
+- **H4 — Removed dead field `_pending_action_id`**
+  (`npc_sim/llm/llm_decision_system.py`): declared in `__init__`, never
+  assigned or read.
+- **H5 — `_valid_actions()` silent empty fallback → loud assert**
+  (`npc_sim/llm/npc_serializer.py`): if `ctx._action_library` ever goes
+  missing, the LLM previously received `valid_actions:[]` and would
+  hallucinate any `action_id`, triggering H4 guided retry loops. Now
+  fails fast.
+
+### Medium
+
+- **M1 — Duplicate `ActionContext` import**
+  (`npc_sim/decisions/decision_system.py`): merge-resolution slip; deleted.
+- **M2 — `_pending_response` access wrapped in `_pending_lock`**
+  (`npc_sim/llm/llm_decision_system.py`): currently safe by accident
+  (GIL + `max_concurrent=1`); preventive lock for self-documenting safety.
+- **M3 — `hard_interrupt` now unconditionally breaks any lock**
+  (`npc_sim/decisions/decision_system.py`, `action_lock.py`): the
+  `interrupt_allowed` field was preventing threats from breaking
+  Heal/Attack locks. Field retained as no-op (documented) so existing
+  call sites stay valid; the gate now trusts `hard_interrupt` semantics.
+- **M4 — `GatherAction.exit_cond` OR → AND + `_vital_interrupt`**
+  (`npc_sim/decisions/actions/builtin.py`): exiting when EITHER stack
+  filled left water-stack empty when food filled; now requires both.
+  `min_duration` shortened 120→30s and `interrupt_predicate` added for
+  symmetry with Work/Sleep/Pray.
+- **M5 — `--strict-every 0` ZeroDivisionError clamped**
+  (`run_diagnostic.py`): `args.strict_every = max(1, args.strict_every)`.
+- **M6 — CSV logger now includes `inv_grain`, `inv_tools`**
+  (`npc_sim/diagnostics/sim_logger.py`): Farmer's grain output and tool
+  inventory were invisible in diagnostics. Two new columns; fallback
+  `ItemIds` dummy class extended.
+- **M7 — `LLMRequest._counter` moved to `LLMRequestQueue` instance**
+  (`npc_sim/llm/llm_request_queue.py`): class-level counter never reset
+  across process lifetime; two `SimulationManager` instances in the
+  same Python session got non-deterministic queue ordering for
+  tied-priority requests. Now per-queue; `LLMRequest` accepts `seq` in
+  its constructor (test_queue_preemption.py updated).
+- **M8 — `npc.memory._count` → `.count` (public)**
+  (`npc_sim/diagnostics/sim_logger.py`): logger was reaching into a
+  private attribute; `NPCMemory.count` already existed as a property.
+- **M9 — `ctx.day_length_seconds` replaces private `_config` access**
+  (`npc_sim/llm/npc_serializer.py`, `npc_sim/decisions/action_context.py`):
+  serializer was poking `ctx.self_npc._config.day_length_seconds`; same
+  smell as M8 and would `ZeroDivisionError` on test misconfiguration.
+  `ActionContext` now exposes `day_length_seconds` directly (defaults
+  to 1440.0 if invalid).
+- **M10 — Single source of truth for consumable stack cap**
+  (`npc_sim/decisions/actions/builtin.py`): added module constant
+  `MAX_CONSUMABLE_STACK = 5` and threaded it through Gather (4 call
+  sites) and Trade (1 call site). Bypassing Gather's local cap by
+  trading is no longer possible.
+
+### Low
+
+- **L1 — Docstring drift "11 → 12 built-in actions"**
+  (`npc_sim/decisions/actions/builtin.py`): matches the actual count
+  and `CLAUDE.md`.
+- **L3 — `WorldMap.get_zone()` warns on unknown zone names**
+  (`npc_sim/simulation/world_map.py`): silent fallback to Town Square
+  hid typos elsewhere; now prints a stderr warning.
+- **L4 — `top_memory_desc` defensive guard completed**
+  (`npc_sim/diagnostics/sim_logger.py`): also checks
+  `hasattr(top_mem.event, "description")` to survive future `SimEvent`
+  refactors.
+
+### Notes
+- L2 (SYSTEM_PROMPT `Aggressive` trait not in `_enforce_trait_coherence`)
+  was triaged as "not a bug" — the prompt's behavior rule and the H5
+  override list are intentionally separate. Documented; no code change.
+- The legacy `interrupt_allowed` field on `ActionLock` is retained as a
+  documented no-op rather than removed across 13 call sites; a follow-up
+  cleanup can drop it cleanly.
+- Two long-run observations flagged but not v1.5.1 regressions:
+  Pray frequency dropped to 0 over 30 sim-days (indirect side-effect of
+  H2 — WorkAction releases more often, Pray's lower score never wins);
+  89% of rows hit `anger ≥ 0.6 AND happiness ≥ 0.6` ("Conflicted" mood)
+  long-tail psychology saturation. Both tracked for v1.6+ tuning.
+
+---
+
 ## [1.5.0] — 2026-05-12 (long-run stability + integration + polish)
 
 Risk-first triage of the long-run stability audit (Phase A: A1–A7), then

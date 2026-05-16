@@ -27,6 +27,9 @@ class ActionContext:
         self.delta_time = delta_time
         self.world = world
         self.rng = rng
+        # Retain day length so downstream consumers (e.g. NPCSerializer for the
+        # LLM "day" field) don't have to poke npc._config.
+        self.day_length_seconds = day_length_seconds if day_length_seconds > 0 else 1440.0
 
         if day_length_seconds > 0:
             self.sim_day_hour = (current_time % day_length_seconds) / day_length_seconds * 24.0

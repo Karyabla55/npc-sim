@@ -1,9 +1,76 @@
 # Bug Tracker & Technical Debt
 
 **Document Created:** 2026-05-01
-**Latest Update:** 2026-05-12 (v1.5.0 — all tracked bugs closed; 5 new long-run risks A1–A7 from the audit also closed)
+**Latest Update:** 2026-05-16 (v1.5.1 — 18 untracked audit findings closed)
 **Status:** Active
 **Priority Legend:** CRITICAL > HIGH > MEDIUM > LOW
+
+---
+
+## v1.5.1 Audit Closures (2026-05-16)
+
+A wide-codebase audit prompted by the maintainer surfaced 18 untracked
+issues across `decisions/`, `llm/`, `simulation/`, and `diagnostics/`.
+All closed in the v1.5.1 sweep. None blocked v1.5.0; this release is
+correctness + polish.
+
+| ID | Severity | Location | Fix |
+|----|----------|----------|-----|
+| C1 | CRITICAL | `llm/llm_backend.py:160` | Removed bogus `espo\w*` alternation from EOS-token regex; was eating any LLM token starting with "espo". |
+| H1 | HIGH | `decisions/actions/builtin.py` PrayAction.execute | Scaled `+0.03` happiness gain by `ctx.delta_time`; saturated to 1.0 in 3.4 sim-sec during 600 s prayer lock. |
+| H2 | HIGH | `decisions/actions/builtin.py` WorkAction.create_lock | `min_duration_sim_seconds` 1800 → 480 (8 sim-hour shift). v1.3.0's #23 fix only updated SleepAction; WorkAction remained mis-scaled. |
+| H3 | HIGH | `llm/llm_request_queue.py` | Removed dead `_pop_highest()` method (orphaned by #5's fix). |
+| H4 | HIGH | `llm/llm_decision_system.py:60` | Removed dead `_pending_action_id` field (never written/read). |
+| H5 | HIGH | `llm/npc_serializer.py` `_valid_actions` | Silent empty-list fallback replaced with `assert hasattr(ctx, '_action_library')`. Fails loud on misconfiguration instead of producing LLM hallucinations. |
+| M1 | MEDIUM | `decisions/decision_system.py:8-9` | Removed duplicate `ActionContext` import. |
+| M2 | MEDIUM | `llm/llm_decision_system.py` `_on_response`/`_apply_pending` | Wrapped `_pending_response` write + read + clear under `_pending_lock`; was only protecting the boolean flag. Preventive for any future multi-worker queue. |
+| M3 | MEDIUM | `decisions/decision_system.py:49` | `hard_interrupt` now preempts every lock unconditionally. Was conjoined with `interrupt_allowed`, so Heal / Attack (both 10 s, `interrupt_allowed=False`) could not yield to a fresh threat. `ActionLock.interrupt_allowed` retained as a no-op for API compatibility. |
+| M4 | MEDIUM | `decisions/actions/builtin.py` GatherAction.create_lock | `exit_cond` `OR` → `AND` so a session fills both food and water stacks; `min_duration` 120 → 30 s; added `interrupt_predicate=_vital_interrupt`. |
+| M5 | MEDIUM | `run_diagnostic.py` | `args.strict_every = max(1, …)` clamp prevents ZeroDivisionError on `--strict-every 0`. |
+| M6 | MEDIUM | `diagnostics/sim_logger.py` | Added `inv_grain`, `inv_tools` columns. Farmer's GRAIN output is now visible in CSV; defaulted dummy `ItemIds` fallback also extended. |
+| M7 | MEDIUM | `llm/llm_request_queue.py` | `LLMRequest._counter` moved from class-level to `LLMRequestQueue._next_seq` instance field. Sequence numbers no longer leak across SimulationManager instances in the same Python process. Test `test_queue_preemption.py` updated. |
+| M8 | MEDIUM | `diagnostics/sim_logger.py:121` | `npc.memory._count` → `npc.memory.count` (public property). |
+| M9 | MEDIUM | `llm/npc_serializer.py` + `decisions/action_context.py` | `ctx.self_npc._config.day_length_seconds` → `ctx.day_length_seconds`. ActionContext now retains the field; serializer no longer pokes private state. Also coerces day to `int`. |
+| M10 | MEDIUM | `decisions/actions/builtin.py` | Single source-of-truth `MAX_CONSUMABLE_STACK=5` constant. Both Gather and Trade pass it as `stack_cap`; durable goods (GRAIN, GOLD, TOOLS) keep the default 100. |
+| L1 | LOW | `decisions/actions/builtin.py:3` | Docstring "11 actions" → "12 actions". |
+| L3 | LOW | `simulation/world_map.py` `get_zone` | Logged stderr warning on unknown zone name; previously silent fallback to Town Square hid typos. |
+| L4 | LOW | `diagnostics/sim_logger.py` | `top_memory_desc` now checks `hasattr(top_mem.event, "description")` in addition to `hasattr(top_mem, "event")`. |
+
+**Not-a-bug:** L2 (Aggressive trait in SYSTEM_PROMPT). The trait IS modelled
+in `AttackAction.is_valid()` / `evaluate()`; H5 trait-coherence guard has
+no override only because Utility AI already biases correctly.
+
+**Verification:** `python -m pytest tests/ -q` 68 pass · `python
+run_diagnostic.py --hours 720 --strict --strict-every 1000 --seed 42
+--npc-count 5` → 5 / 5 alive at sim-day 30 (432 001 ticks, 2 160 005 rows
+across `sim_full.csv` + 2 rotated archives), 0 invariant violations,
+action distribution healthy (Drink share 5.68 % vs. 0.02 % in pre-fix
+March 22 capture).
+
+**Observed (not a regression of these fixes; worth surfacing):**
+- `Pray` action share dropped from v1.5.0's 5 402 ticks to 0 in the 30-day
+  diagnostic. Root cause is indirect — H2 (WorkAction `min_duration`
+  1800→480) gives NPCs many more decision points per sim-day, and Pray's
+  current `evaluate()` score (≈ 0.08 for a stress=0.27 Devout Priest after
+  the vital-penalty multiplier) loses to Work (≈ 0.43) at every fresh
+  evaluation. Pray previously rode along on Work's long lock; with locks
+  releasing every 8 sim-hours it never gets selected again. The data
+  structures still work; the score curve just no longer puts Pray on the
+  winners' board for a no-stress mix. Tracked as a tuning task for v1.6,
+  not as a v1.5.1 regression.
+- 89 % of Scholar rows hit `anger ≥ 0.6 AND happiness ≥ 0.6` (mood
+  "Conflicted") over 30 sim-days. v1.4.0's #28 fix verified this never
+  occurred in a 6 sim-hour run; the long-run saturation is a separate
+  issue from the v1.5.1 audit and is not caused by any change in this
+  sweep. Track as a future psychology tuning task; cross-inhibition
+  rate (currently 0.5) likely needs to be raised, or the unscaled
+  Eat/Drink happiness gains (`+0.08`, `+0.05` per call) need to be
+  smaller in long-tail runs.
+
+**Pre-existing unrelated:** `run_diagnostic.py print_summary()` crashes on
+Windows cp1254 codepage when printing the box-drawing summary header. Not
+introduced by v1.5.1; flag for a one-line `print(..., flush=True)` /
+encoding fix in a follow-up.
 
 ---
 
@@ -273,7 +340,7 @@
 | **Issue** | Two separate calibration errors compound each other: **(a) Restore rate too fast:** `SleepAction.execute()` uses `restore = 0.15 * max_energy * delta_time`. For Scholar (`max_energy=90`, `delta_time=0.1`): 13.5 units/sim-second → full recovery in **6.7 sim-seconds** (0.1 sim-minutes). For a realistic 8-hour sleep cycle (480 sim-sec), the rate should be ≈ 0.122 units/sim-sec. Current rate is 110× too fast. **(b) Lock `min_duration` wrong scale:** `SleepAction.min_duration = 3600` sim-seconds = **2.5 sim-days** in a 1440-sec day. `WorkAction.min_duration = 1800` sim-seconds = **1.25 sim-days**. These values are calibrated for an 86400-second (real-world) day. For an 8-hour sleep or work shift in a 1440-sec day: target `min_duration ≈ 480` sim-seconds. Note: currently masked by bug #21 (lock breaks before min_duration matters), but becomes the primary symptom after #21 is fixed. |
 | **Impact** | (a) Even with locks correctly enforced, NPCs fully recover in 7 sim-seconds and the `exit_condition` (`energy_norm ≥ 0.95`) fires immediately, yielding 7-second sleep cycles. (b) If restore rate is fixed without fixing `min_duration`, NPCs sleep for 2.5 sim-days before being allowed to exit. Both issues must be fixed together with bug #22 for a coherent 24-hour lifecycle. |
 | **Fix** | (a) Change restore formula: `restore = (0.122 / max_energy) * max_energy * delta_time` → simplifies to `restore = 0.122 * delta_time` (tune to ≈ 8-hour full recovery). (b) Change both lock durations from `3600` → `480` and `1800` → `480` sim-seconds (adjust as desired for balance). |
-| **Status** | **FIXED — v1.3.0** · (a) Restore rate changed `0.15 → 0.002` (≈ 480 sim-sec full recovery). (b) SleepAction `min_duration` changed `3600.0 → 480.0` sim-seconds (8 sim-hours in a 1440-sec day). |
+| **Status** | **FIXED — v1.3.0 (Sleep), v1.5.1 (Work)** · (a) Restore rate changed `0.15 → 0.002` (≈ 480 sim-sec full recovery). (b) SleepAction `min_duration` changed `3600.0 → 480.0` sim-seconds (8 sim-hours in a 1440-sec day). (c) **v1.5.1 (H2):** WorkAction `min_duration` likewise corrected `1800 → 480`; the original v1.3.0 sweep only touched SleepAction. |
 
 ---
 

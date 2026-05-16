@@ -156,8 +156,9 @@ class OllamaBackend(ILLMBackend):
     def _parse(self, npc_id: str, content: str, raw: str,
                latency: float) -> LLMResponse:
         """Parse model output JSON → LLMResponse. Raises ValueError on schema error."""
-        # Strip any EOS token artifacts that leaked past Ollama's stop list
-        content = re.sub(r'<\|eot_id\|>|<\|end_of_text\|>|<\|eot\b|espo\w*', '', content)
+        # Strip any EOS token artifacts that leaked past Ollama's stop list.
+        # Mirrors the `stop` list configured on the chat request body above.
+        content = re.sub(r'<\|eot_id\|>|<\|end_of_text\|>|<\|eot\b', '', content)
         content = content.strip()
 
         data = json.loads(content)

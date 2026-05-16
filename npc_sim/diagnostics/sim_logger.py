@@ -22,6 +22,7 @@ COLUMNS = [
     "hp", "hp_max", "hunger", "thirst", "energy", "stress",
     "emotion_happiness", "emotion_fear", "emotion_anger", "mood",
     "inv_food", "inv_water", "inv_medicine", "inv_gold",
+    "inv_grain", "inv_tools",
     "top_goal", "action_selected", "action_valid",
     "action_target_id", "action_dialogue",
     "percept_count", "top_percept_tag", "top_percept_threat",
@@ -118,7 +119,7 @@ class SimLogger:
 
         # Top memory — use NPCMemory's own API
         top_mem = npc.memory.get_most_salient()
-        mem_count = npc.memory._count
+        mem_count = npc.memory.count
 
         # Top goal
         top_goal = npc.goals.get_top_goal()
@@ -152,6 +153,8 @@ class SimLogger:
             "inv_water": inv.get_amount(ItemIds.WATER),
             "inv_medicine": inv.get_amount(ItemIds.MEDICINE),
             "inv_gold": inv.get_amount(ItemIds.GOLD),
+            "inv_grain": inv.get_amount(ItemIds.GRAIN),
+            "inv_tools": inv.get_amount(ItemIds.TOOLS),
             # Goals / action
             "top_goal": top_goal.goal_type if top_goal else "",
             "action_selected": action_selected,
@@ -164,7 +167,11 @@ class SimLogger:
             "top_percept_threat": f"{top_percept.threat_level:.2f}" if top_percept else "",
             # Memory
             "memory_count": mem_count,
-            "top_memory_desc": (top_mem.event.description[:60] if top_mem and hasattr(top_mem, "event") else ""),
+            "top_memory_desc": (
+                top_mem.event.description[:60]
+                if top_mem and hasattr(top_mem, "event")
+                   and hasattr(top_mem.event, "description")
+                else ""),
             # LLM
             "llm_called": 1 if llm_called else 0,
             "llm_trigger": llm_trigger,
@@ -235,3 +242,4 @@ try:
 except ImportError:
     class ItemIds:  # type: ignore
         FOOD = "food"; WATER = "water"; MEDICINE = "medicine"; GOLD = "gold"
+        GRAIN = "grain"; TOOLS = "tools"

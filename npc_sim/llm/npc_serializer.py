@@ -74,8 +74,7 @@ class NPCSerializer:
             },
             "inv": self._serialize_inventory(npc),
             "time": {
-                "day": ctx.current_time // (ctx.self_npc._config.day_length_seconds
-                                            if ctx.self_npc._config else 1440),
+                "day": int(ctx.current_time // ctx.day_length_seconds),
                 "hr": round(ctx.sim_day_hour, 1),
             },
             "pos": {
@@ -157,6 +156,12 @@ class NPCSerializer:
 
     def _valid_actions(self, ctx: ActionContext) -> list[str]:
         """Only include actions that pass is_valid() for token efficiency."""
-        if not hasattr(ctx, '_action_library'):
-            return []
+        # SimulationManager.tick() always sets ctx._action_library before invoking
+        # the LLM decision system. If it isn't here, the LLM would receive
+        # valid_actions=[] and hallucinate any action_id, triggering H4 retries
+        # in a loop. Fail loudly instead of masking the misconfiguration.
+        assert hasattr(ctx, '_action_library'), (
+            "_action_library missing on ActionContext — SimulationManager.tick() "
+            "must set ctx._action_library before LLMDecisionSystem.tick()."
+        )
         return [a.action_id for a in ctx._action_library.get_all() if a.is_valid(ctx)]

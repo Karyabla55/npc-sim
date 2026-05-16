@@ -52,8 +52,10 @@ def parse_args():
     parser.add_argument("--strict", action="store_true",
                         help="Check long-run invariants every --strict-every ticks; exit 2 on violation.")
     parser.add_argument("--strict-every", type=int, default=1000, dest="strict_every",
-                        help="Invariant check interval in ticks (default=1000)")
-    return parser.parse_args()
+                        help="Invariant check interval in ticks (default=1000, min=1)")
+    args = parser.parse_args()
+    args.strict_every = max(1, args.strict_every)
+    return args
 
 
 def build_simulation(args) -> SimulationManager:
