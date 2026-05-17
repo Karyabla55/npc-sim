@@ -33,9 +33,9 @@ python test_llm_smoke.py
 ### pytest Suite
 ```bash
 python -m pytest tests/ -q
-# 68 cases as of v1.5.0 (inventory cap, dict eviction, multiplicative decay,
+# 76 cases as of v1.6.0 (inventory cap, dict eviction, multiplicative decay,
 # CSV rotation, invariants, action wiring, trait coherence, queue preemption,
-# config hygiene)
+# config hygiene, DualLLMBackend chain + H6 fallback + npc_id injection)
 ```
 
 ### Install
@@ -54,11 +54,11 @@ Every NPC tick runs both layers sequentially inside `SimulationManager.tick()`:
 
 **Layer 1 — Utility AI** (`npc_sim/decisions/`): Pure math, runs every tick without LLM. `UtilityEvaluator` scores all 12 built-in actions and picks the highest. Trait modifiers adjust scores (e.g., `Brave` suppresses flee; `Pacifist` suppresses attack).
 
-**Layer 2 — LLM Brain** (`npc_sim/llm/`): Fires only on interrupt (threat ≥ 0.8 or HP drop ≥ 15). Async — the simulation never blocks waiting for LLM. Currently a **single-model pipeline** through `OllamaBackend`; the asymmetric **Dual-LLM pipeline** below is documented as the target design for v1.5+ (roadmap task G9 in `docs/nextsteps.md`) but is not implemented yet — see "DualLLMBackend Status" below.
+**Layer 2 — LLM Brain** (`npc_sim/llm/`): Fires only on interrupt (threat ≥ 0.8 or HP drop ≥ 15). Async — the simulation never blocks waiting for LLM. v1.6.0: **DualLLMBackend is fully implemented** — enable with `llm_backend="dual"` in `SimulationConfig`.
 
-Planned Dual-LLM split:
-- **Reasoner** (3B Llama 3.2): receives full NPC state JSON, outputs Turkish Chain-of-Thought
-- **Formatter** (1B Llama 3.2): receives CoT, outputs strict JSON `LLMResponse` with `action_id`, `target_id`, `dialogue`, `emotion`
+Dual-LLM split (v1.6.0+):
+- **Reasoner** (Hermes-3-Llama-3.2-3B + LoRA r=16): receives persona card + NPC state JSON, outputs Turkish Chain-of-Thought (3-5 sentences)
+- **Formatter** (Llama-3.2-1B-Instruct + LoRA r=8): receives CoT, outputs strict JSON `LLMResponse` with `action_id`, `target_id`, `dialogue`, `emotion`; `npc_id` injected at runtime by `DualLLMBackend`
 
 The LLM result is applied on the *next* tick via `_apply_pending()`, not immediately.
 
@@ -111,7 +111,11 @@ FactionRegistry.tick_decay()             ← decay faction trust
 | `npc_sim/diagnostics/invariants.py` | Long-run safety net (v1.5.0+): `check_invariants(mgr) → list[InvariantViolation]` covering vital range/finiteness, dict caps, inventory cap, memory ring overflow. Wired into `run_diagnostic.py --strict` |
 | `server.py` | Flask + SocketIO web dashboard |
 | `run_diagnostic.py` | Headless runner for regression testing |
-| `Stateful_NPC/generator/npc_sim_generator_v2.py` | Training data generator (CoT + JSON pairs) |
+| `Stateful_NPC/generator/npc_sim_generator_v2.py` | Training data generator — wires decision_factors + persona_card + bootstrap_cot |
+| `Stateful_NPC/generator/decision_factors.py` | Multi-factor decision model: `self_power` vs `perceived_threat` + `duty_pull` → 3-zone action label |
+| `Stateful_NPC/generator/persona_card.py` | Turkish NPC identity preamble (2-3 sentences) prepended to Reasoner user turn |
+| `Stateful_NPC/generator/bootstrap_cot.py` | Gemma 3 4B CoT bootstrap via Ollama + SHA-keyed disk cache |
+| `notebooks/newgen-rpg.ipynb` | Kaggle-ready v5 training notebook (Reasoner + Formatter, packing=False, stress test) |
 
 ### The 12 Built-in Actions
 
@@ -129,8 +133,13 @@ All randomness flows through `SimRng` (wraps `random.Random` with a seeded const
 | `tick_rate` | 10.0 | Ticks/real-second |
 | `day_length_seconds` | 1440.0 | 1 sim-day |
 | `llm_enabled` | False | Requires Ollama running |
-| `llm_model` | `"hermes-lora"` | Fine-tuned model name |
-| `ollama_base_url` | `http://localhost:11434` | Ollama API |
+| `llm_backend` | `"ollama"` | `"ollama"` \| `"mock"` \| `"dual"` |
+| `llm_model` | `"hermes-lora"` | Model name for `OllamaBackend` |
+| `ollama_base_url` | `http://localhost:11434` | Ollama API (single-model backend) |
+| `llm_reasoner_model` | `"reasoner-lora-v5"` | Reasoner model name (dual backend) |
+| `llm_formatter_model` | `"formatter-lora-v5"` | Formatter model name (dual backend) |
+| `llm_reasoner_base_url` | `http://localhost:11434` | Reasoner Ollama port |
+| `llm_formatter_base_url` | `http://localhost:11435` | Formatter Ollama port |
 | `llm_interrupt_threat_threshold` | 0.8 | H2 trigger |
 | `llm_interrupt_hp_drop` | 15.0 | H2 trigger |
 | `logger_enabled` | True | Writes `logs/sim_full.csv` |
@@ -149,16 +158,13 @@ The project has strong **data structures** with a **largely-wired integration la
 - `FactionRegistry.disposition` → consumed by `AttackAction` (boosts attack on enemy factions, suppresses on allied) and `SocializeAction` (mirror weights) via `ActionContext.faction_disposition()` — B4.
 - All five tracker polish bugs (#15, #16, #17, #18, #20) closed in v1.5.0; see `docs/bugs_and_issues.md`.
 
-### DualLLMBackend Status
-
-**`DualLLMBackend` is documented in `docs/llm_data_spec.md` and `docs/architecture.md` but does NOT exist in code.** Only `OllamaBackend` (single model) and `MockBackend` are implemented. The CLAUDE.md reference to "Dual-LLM pipeline" in the architecture section describes the intended design, not the current implementation.
-
 ### LLM Trigger Conditions
 
 LLM only fires on: `threat ≥ 0.8` OR `HP drop ≥ 15`. All other ticks use Utility AI. As of v1.4.0, `dialogue` output is propagated: `LLMDecisionSystem._apply_pending()` stores it on `NPC.pending_dialogue`, and `SocializeAction.execute()` consumes it and writes a `Dialogue` event into the listener's `NPCMemory`.
 
 ## Documentation
 
+- `docs/llm_pipeline.md` — **Canonical v1.6.0 reference**: runtime architecture, training pipeline, schema, eval criteria, troubleshooting
 - `docs/architecture.md` — v2.0 Dual-LLM architecture, tick flow, extension points, "What NOT to Do"
 - `docs/llm_data_spec.md` — NPC JSON payload schema, Reasoner/Formatter data specs
 - `docs/dataset_training.md` — Dataset generation pipeline and training targets
@@ -173,7 +179,7 @@ LLM only fires on: `threat ≥ 0.8` OR `HP drop ≥ 15`. All other ticks use Uti
 
 The Ollama server must be running locally at `http://localhost:11434` before enabling `llm_enabled=True`. The default model name `hermes-lora` refers to a custom fine-tuned model. Use `llm_backend="mock"` in `SimulationConfig` for offline development/testing.
 
-For the planned `DualLLMBackend`: two Ollama instances are needed (ports 11434 + 11435). See `docs/nextsteps.md` Section 6 for the implementation sketch.
+For `DualLLMBackend` (v1.6.0+): two Ollama instances are needed (ports 11434 + 11435). Set `llm_backend="dual"` in `SimulationConfig`. See `docs/llm_pipeline.md` §3 for Kaggle training + Ollama deployment steps.
 
 ## Log Analysis
 

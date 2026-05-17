@@ -4,27 +4,23 @@
 
 **Author:** Sadık Abdusselam Albayrak · **License:** Apache 2.0
 
-> **Implementation status (as of v1.5.0):** Bu dokuman'daki Dual-LLM
-> (Reasoner + Formatter) eğitim hattı **hedef mimari**dir; runtime'da
-> `npc_sim/llm/llm_backend.py` hâlâ yalnızca `OllamaBackend` (tek model) ve
-> `MockBackend` sağlar. Dataset üretimi (Reasoner CoT + Formatter JSON
-> çiftleri) zaten dual-LLM şeması için hazırlanır; `DualLLMBackend` v1.5+
-> yol haritasında G9 görevi olarak planlandı (bkz. `docs/nextsteps.md`).
-> Mevcut tek-model eğitiminde her iki dataset birleşik kullanılabilir.
+> **Implementation status (v1.6.0):** Dual-LLM eğitim hattı **tamamen aktif**.
+> `DualLLMBackend` kodda mevcuttur; `SimulationConfig(llm_backend="dual")` ile
+> etkinleştirilir. Canonical referans: `docs/llm_pipeline.md`.
 
 ---
 
 ## 📂 Versiyon Karşılaştırması
 
-| Özellik | v1 (Orijinal) | v2 (NPC-Sim Entegre) | v4 (Dual-LLM Pipeline) |
-|---------|--------------|---------------------|------------------------|
-| Sistem Mimarisi | Tek Model | Tek Model | Asimetrik Çift Model (Reasoner + Formatter) |
-| Durum değişkenleri | Stress + Trust (2 değer) | Big Five + Vitals + Emotions | Big Five + Vitals + Emotions (13 değer) |
-| Eylem uzayı | 9 eylem | 11 eylem | 12 eylem (`drink` dahil) |
-| Konum | Ham koordinat yok | Semantik zone + landmark | Semantik zone + landmark |
-| Kesme Mekanizması | Yok | `interrupt: true` (H2) | `interrupt: true` (H2) + Deviation D5-D8 |
-| Çıktı formatı | `{thought, speech, action, emotion}` | `{npc_id, reasoning, selected_action, emotion}` | Reasoner: Serbest Metin / Formatter: JSON |
-| Eğitim örnekleri | 20k + 2k | 20k + 2k | Reasoner: 10k + 2k / Formatter: ~12k |
+| Özellik | v1 (Orijinal) | v2 (NPC-Sim Entegre) | v4 (Dual-LLM Pipeline) | v5 (v1.6.0) |
+|---------|--------------|---------------------|------------------------|-------------|
+| Sistem Mimarisi | Tek Model | Tek Model | Asimetrik Çift Model | Asimetrik Çift Model (uygulandı) |
+| Durum değişkenleri | Stress + Trust (2) | Big Five + Vitals + Emotions | Big Five + Vitals + Emotions | + persona card |
+| Eylem uzayı | 9 eylem | 11 eylem | 12 eylem | 12 eylem |
+| Konum | Ham koordinat yok | Semantik zone + landmark | Semantik zone + landmark | Semantik zone + landmark |
+| Eylem etiketi | Heuristic | Heuristic | Heuristic + D5-D8 | Multi-factor (self_power vs threat + duty) |
+| Çıktı formatı | `{thought, speech, action, emotion}` | `{npc_id, reasoning, ...}` | Reasoner: Metin / Formatter: JSON | Formatter: JSON **(npc_id yok)** |
+| Eğitim örnekleri | 20k + 2k | 20k + 2k | Reasoner: 10k + 2k / Formatter: ~12k | Aynı + gemma4:e4b CoT |
 
 ---
 
@@ -33,14 +29,19 @@
 ```
 Stateful_NPC/
 ├── generator/
-│   ├── npc_sim_generator_v2.py   ← Yeni Dual-LLM generator v4
+│   ├── npc_sim_generator_v2.py   ← Ana generator (decision_factors + persona_card + bootstrap_cot bağlar)
+│   ├── decision_factors.py       ← self_power / perceived_threat / duty_pull → 3-zone eylem etiketi
+│   ├── persona_card.py           ← Türkçe NPC kimlik preamble (2-3 cümle, R14 fix)
+│   ├── bootstrap_cot.py          ← Gemma 3 4B CoT üretimi (Ollama) + SHA disk cache
 │   ├── config.py                 ← v1 konfigürasyon (roller, diyaloglar)
 │   └── npc_state_machine.py      ← v1 state machine
-├── newgen-rpg.ipynb              ← Llama 3 SFTTraining Dual-Phase Notebook
 └── data/
-    ├── train_reasoner.jsonl      ← Reasoner corpus (10k)
+    ├── train_reasoner.jsonl      ← Reasoner corpus (10k, persona + state → CoT)
     ├── test_reasoner.jsonl       ← Reasoner test corpus (2k)
-    ├── train_formatter.jsonl     ← Formatter corpus (~12k, paraphrase dâhil)
+    ├── train_formatter.jsonl     ← Formatter corpus (~12k, paraphrase dâhil, npc_id yok)
+
+notebooks/
+└── newgen-rpg.ipynb              ← Kaggle v5: packing=False + collator + 1B-Instruct + stress test
 ```
 
 ---
@@ -59,7 +60,6 @@ Mimari iki bağımsız modelden oluşur. Reasoner mantık kurar, Formatter bunu 
 
 ```json
 {
-  "npc_id": "npc_a3b8f70a",
   "reasoning": "Kurt bana yaklaştı ama canım düşük. Yiyecek almak daha öncelikli, savaşa girmeyeceğim.",
   "selected_action": {
     "action_id": "gather",
@@ -69,6 +69,8 @@ Mimari iki bağımsız modelden oluşur. Reasoner mantık kurar, Formatter bunu 
   "emotion": "Calm"
 }
 ```
+
+> **v1.6.0:** `npc_id` Formatter çıktısından kaldırıldı. Runtime'da `DualLLMBackend` enjekte eder.
 
 ---
 

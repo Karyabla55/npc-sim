@@ -1,7 +1,7 @@
 # Bug Tracker & Technical Debt
 
 **Document Created:** 2026-05-01
-**Latest Update:** 2026-05-16 (v1.5.1 — 18 untracked audit findings closed)
+**Latest Update:** 2026-05-17 (v1.6.0 — Dual-LLM pipeline implemented, generator rewrite)
 **Status:** Active
 **Priority Legend:** CRITICAL > HIGH > MEDIUM > LOW
 
@@ -71,6 +71,32 @@ March 22 capture).
 Windows cp1254 codepage when printing the box-drawing summary header. Not
 introduced by v1.5.1; flag for a one-line `print(..., flush=True)` /
 encoding fix in a follow-up.
+
+---
+
+## v1.6.0 Release (2026-05-17)
+
+No new bugs. Changes are additive (new files, new config fields, new test suite).
+
+**DualLLMBackend (G9 — now closed):**
+- `npc_sim/llm/llm_backend.py`: `DualLLMBackend` implemented with Reasoner→H6 gate→Formatter chain.
+- `npc_id` removed from Formatter output schema; injected at runtime from `call()` parameter.
+- H6 gate: CoT validation (non-JSON, 50-600 chars) — falls back to `OllamaBackend` single-pass on failure.
+- `sim_config.py`: `llm_backend`, `llm_reasoner_model/url`, `llm_formatter_model/url` fields added.
+- `tests/test_dual_llm_backend.py`: 8 mock-HTTP tests (happy path, H6 fallback, npc_id injection, timeout).
+
+**Generator rewrite (G9 data side):**
+- `decision_factors.py`: multi-factor decision model (self_power vs perceived_threat + duty_pull).
+- `persona_card.py`: Turkish NPC identity preamble prepended to Reasoner user turn.
+- `bootstrap_cot.py`: Gemma 3 4B CoT via local Ollama + SHA-keyed disk cache.
+- `npc_sim_generator_v2.py`: wires all three modules; `--no-gemma` flag added.
+
+**Training fixes (root causes R1-R14 closed):**
+- `packing=False` + `DataCollatorForCompletionOnlyLM` in both SFTTrainer cells (R1-R4).
+- Formatter base = `Llama-3.2-1B-Instruct` not base (R3).
+- `npc_id` absent from Formatter training examples (R10/R11).
+
+**Verification:** `python -m pytest tests/ -q` → 76 pass.
 
 ---
 

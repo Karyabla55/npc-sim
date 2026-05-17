@@ -2,13 +2,11 @@
 
 **Version:** 2.0 (Dual-LLM) | **Author:** Sadık Abdusselam Albayrak | **License:** Apache 2.0
 
-> **Implementation status (as of v1.5.0):** Bu spec'in tanımladığı asimetrik
-> Dual-LLM (Reasoner + Formatter) pipeline'ı kodda HENÜZ yok. Şu an
-> `npc_sim/llm/llm_backend.py` yalnızca `OllamaBackend` (tek model) ve
-> `MockBackend` sağlıyor. `DualLLMBackend` v1.5 yol haritasında G9 görevi
-> olarak planlandı (bkz. `docs/nextsteps.md`). Bu doküman aşağıdaki şemayı
-> hedef mimari olarak okuyun; mevcut tek-model davranışı bu spec'in alt
-> kümesidir (Reasoner + Formatter aynı modelde birleşir).
+> **Implementation status (v1.6.0):** Bu spec'in tanımladığı asimetrik
+> Dual-LLM pipeline **kodda tam olarak uygulandı**. `DualLLMBackend`
+> (`npc_sim/llm/llm_backend.py`) Reasoner→H6→Formatter zincirini yönetir;
+> `SimulationConfig(llm_backend="dual")` ile etkinleştir.
+> Canonical referans: `docs/llm_pipeline.md`.
 
 Bu belge NPC-Sim'in LLM entegrasyon katmanının veri tiplerini, şemasını ve beklenen model davranışlarını tanımlar. Asimetrik Dual-LLM mimarisi kullanarak kendi modelini eğitecek araştırmacılar için birincil referans kaynağıdır.
 
@@ -117,7 +115,6 @@ Model YALNIZCA aşağıdaki JSON objesini döndürmelidir. Markdown, kod bloğu 
 
 ```json
 {
-  "npc_id": "string",
   "reasoning": "string",
   "selected_action": {
     "action_id": "string",
@@ -128,11 +125,14 @@ Model YALNIZCA aşağıdaki JSON objesini döndürmelidir. Markdown, kod bloğu 
 }
 ```
 
+> **v1.6.0 not:** `npc_id` Formatter çıktısından **kaldırıldı**. Runtime'da
+> `DualLLMBackend.call()` tarafından `npc_id` parametresinden enjekte edilir.
+> Eğitim verisinde ve model çıktısında `npc_id` bulunmamalıdır.
+
 ### 3.1 Alan Açıklamaları (Çıktı)
 
 | Alan | Gerekli | Açıklama |
 |------|---------|----------|
-| `npc_id` | ✅ | Giriş payload'undaki [id](file:///d:/DeepLearning/Projects/NLP_ABM_Sim/npc_sim/core/sim_rng.py#53-62) değerinin aynısı |
 | `reasoning` | ✅ | Birinci şahıs iç monolog (1-3 cümle). NPC'nin neden bu eylemi seçtiğini açıklar. |
 | `selected_action.action_id` | ✅ | [valid_actions](file:///d:/DeepLearning/Projects/NLP_ABM_Sim/npc_sim/llm/npc_serializer.py#151-162) listesindeki değerlerden **biri**. Başka değer geçersizdir. |
 | `selected_action.target_id` | ❌ | Hedef varlık kimliği (sosialleşme/ticaret için, diğerlerinde null) |
@@ -143,7 +143,6 @@ Model YALNIZCA aşağıdaki JSON objesini döndürmelidir. Markdown, kod bloğu 
 
 ```json
 {
-  "npc_id": "npc_a3b8f70a",
   "reasoning": "Kurt 0.82 tehdit seviyesiyle çok yakın. Açım ama saldırıya geçmek akıllıca değil. Önce yiyecek toplayıp enerji kazanacağım, kurdu gözetlemeye devam edeceğim.",
   "selected_action": {
     "action_id": "gather",
