@@ -529,4 +529,7 @@ body {
 .config-grid input[type="checkbox"] { margin-left: 0.2rem; transform: scale(1.2); cursor: pointer; }
 .btn-primary { background: var(--accent-1); color: white; border-color: var(--accent-1); font-weight: 600; padding: 0.6rem; }
 .btn-primary:hover { filter: brightness(1.2); }
+.ollama-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--border); vertical-align: middle; margin-left: 4px; transition: background 0.3s; }
+.ollama-dot.online  { background: #22c55e; }
+.ollama-dot.offline { background: #ef4444; }
 

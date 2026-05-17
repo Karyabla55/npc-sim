@@ -26,7 +26,7 @@
                 <option value="300">300×</option>
             </select>
             <label>Seed</label><input type="number" id="cfg-seed" placeholder="Random">
-            <label>Enable LLM</label><input type="checkbox" id="cfg-llm">
+            <label>Enable LLM <span id="ollama-dot" class="ollama-dot" title="Checking Ollama..."></span></label><input type="checkbox" id="cfg-llm">
             <label>Log Enabled</label><input type="checkbox" id="cfg-log" checked>
         </div>
         <button class="btn btn-primary" onclick="startSimulation()" style="width:100%; margin-top:1.5rem;">Start Simulation</button>

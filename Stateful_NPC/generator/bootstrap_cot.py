@@ -1,9 +1,9 @@
 # Copyright 2025-2026 Sadık Abdusselam Albayrak
 # Licensed under the Apache License, Version 2.0
 """
-Gemma 3 4B bootstrap CoT generator (v1.6.0).
+Gemma 4 E4B bootstrap CoT generator (v1.6.0).
 
-Calls a local Ollama instance running gemma3:4b to produce 3-5 sentence
+Calls a local Ollama instance running gemma4:e4b to produce 3-5 sentence
 Turkish chain-of-thought reasoning for each NPC decision. Results are cached
 on disk (SHA-keyed) so incremental re-runs skip already-generated entries.
 
@@ -17,13 +17,14 @@ Public API:
 from __future__ import annotations
 import hashlib
 import json
+import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 _CACHE_DIR = Path(__file__).parent / ".cot_cache"
 _OLLAMA_URL = "http://localhost:11434/api/generate"
-_MODEL = "gemma3:4b"
+_MODEL = "gemma4:e4b"
 _TIMEOUT_SEC = 30
 
 # Structured prompt: feeds the decision factors explicitly so Gemma reasons
@@ -96,7 +97,7 @@ def generate_via_gemma(
             "model": _MODEL,
             "prompt": prompt,
             "stream": False,
-            "options": {"temperature": 0.75, "num_predict": 300, "stop": ["\n\n"]},
+            "options": {"temperature": 0.75, "num_predict": 200, "stop": ["\n\n"]},
         },
         ensure_ascii=False,
     ).encode()
@@ -112,7 +113,8 @@ def generate_via_gemma(
         with urllib.request.urlopen(req, timeout=_TIMEOUT_SEC) as resp:
             data = json.loads(resp.read())
             cot = data.get("response", "").strip()
-    except (urllib.error.URLError, json.JSONDecodeError, OSError):
+    except (urllib.error.URLError, json.JSONDecodeError, OSError) as e:
+        print(f"  [CoT] Gemma unavailable ({type(e).__name__}), using template", file=sys.stderr)
         return None
 
     if not cot or len(cot) < 30:

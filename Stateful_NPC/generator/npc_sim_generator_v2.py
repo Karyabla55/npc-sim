@@ -26,6 +26,14 @@ import random
 import sys
 import uuid
 
+try:
+    from tqdm import tqdm as _tqdm
+except ImportError:
+    class _tqdm:  # type: ignore[misc]
+        def __init__(self, **kw): pass
+        def update(self, n=1): pass
+        def close(self): pass
+
 # Local generator modules (same directory)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from decision_factors import pick_action_multifactor  # noqa: E402
@@ -457,7 +465,7 @@ def generate_cot_reasoning(
 
     # ── S2: Alternative consideration ────────────────────────────────────────
     alternatives: list[str] = []
-    if action_id != "eat" and v["hun"] > 0.50:
+    if action_id not in ("eat", "gather") and v["hun"] > 0.50:
         alternatives.append("yiyecek bulmaya gidebilirdim")
     if action_id != "sleep" and v["en"] < 0.40:
         alternatives.append("dinlenebilirdim")
@@ -477,6 +485,11 @@ def generate_cot_reasoning(
         sentences.append("Başka bir seçenek düşündüm ama mevcut koşullar beni bu karardan alıkoyuyor.")
 
     # ── S3: Trait / emotion influence ────────────────────────────────────────
+    _COMBAT_TRAITS = {"Brave", "Cautious", "Anxious", "Aggressive", "Wrathful"}
+    is_combat_context = (
+        action_id in {"attack", "flee", "heal"}
+        or any(p.get("tag") == "Threat" for p in percepts)
+    )
     trait_sentences = {
         "Brave":     f"Cesaretim beni öne atılmaya itiyor ({emo['fear']:.2f} korku hissetsem de).",
         "Cunning":   "Kurnaz biri olarak her adımı hesaplıyorum, anlık karar vermek hata olur.",
@@ -491,7 +504,7 @@ def generate_cot_reasoning(
     }
     found_sentence = None
     for t in traits:
-        if t in trait_sentences:
+        if t in trait_sentences and (is_combat_context or t not in _COMBAT_TRAITS):
             found_sentence = trait_sentences[t]
             break
     if not found_sentence:
@@ -787,10 +800,12 @@ def generate_dataset(path: str, count: int, seed: int = 42, use_gemma: bool = Tr
     random.seed(seed)
     print(f"Generating {count} reasoner examples -> {path}")
     if use_gemma:
-        print("  Bootstrap mode: Gemma 3 4B via Ollama (falls back to template if unavailable)")
+        print("  Bootstrap mode: Gemma 4 E4B via Ollama (falls back to template if unavailable)")
     samples: list[dict] = []
+    pbar = _tqdm(total=count, unit="ex", dynamic_ncols=True)
     while len(samples) < count:
         example = build_example(use_gemma=use_gemma)
+        prev_len = len(samples)
         samples.append(example)
 
         # ── Oversampling rules ────────────────────────────────────────────────
@@ -829,6 +844,9 @@ def generate_dataset(path: str, count: int, seed: int = 42, use_gemma: bool = Tr
 
         except Exception:
             pass  # Non-critical: skip oversampling if parsing fails
+
+        pbar.update(len(samples) - prev_len)
+    pbar.close()
 
     # Write exactly count samples (strip private _ fields)
     with open(path, "w", encoding="utf-8") as f:

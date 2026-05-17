@@ -10,6 +10,7 @@ from flask import Flask, send_from_directory, jsonify, request
 from flask_socketio import SocketIO
 
 from npc_sim.core.sim_config import SimulationConfig
+from npc_sim.llm.llm_backend import OllamaBackend
 from npc_sim.core.sim_vector3 import SimVector3
 from npc_sim.simulation.simulation_manager import SimulationManager
 from npc_sim.llm.world_registry import WorldRegistry
@@ -80,11 +81,11 @@ def create_simulation(seed: int = 42, npc_count: int = 5, start_hour: float = 6.
     for i, npc in enumerate(npcs):
         angle = (2 * math.pi / npc_count) * i if npc_count > 0 else 0
         radius = 2.0
-        
+
         npc.position = SimVector3(npc.home_pos.x + math.cos(angle) * radius,
                                   npc.home_pos.y,
                                   npc.home_pos.z + math.sin(angle) * radius)
-        
+
         # Face origin roughly
         npc.forward = (SimVector3(50, 0, 50) - npc.position).normalized()
         npc.inventory.add(ItemIds.FOOD, rng.next_int(1, 4))
@@ -93,6 +94,9 @@ def create_simulation(seed: int = 42, npc_count: int = 5, start_hour: float = 6.
         npc.vitals.set_hunger(rng.next_float(0.1, 0.5))
         npc.vitals.set_thirst(rng.next_float(0.1, 0.4))
         mgr.add_npc(npc)
+
+    if llm_enabled:
+        mgr.enable_llm_for_all()
 
     return mgr
 
@@ -166,7 +170,7 @@ def start_sim():
     sim_thread = threading.Thread(target=simulation_loop, daemon=True)
     sim_thread.start()
     
-    return jsonify({"status": "started", "speed": manager.clock.time_scale})
+    return jsonify({"status": "started", "speed": manager.clock.time_scale, "llm_active": llm_enabled})
 
 
 @app.route("/api/control", methods=["POST"])
@@ -236,6 +240,13 @@ def get_llm_status():
     if manager:
         return jsonify(manager.get_llm_stats_full())
     return jsonify({"queue": {}, "per_npc": {}})
+
+
+@app.route("/api/llm/check")
+def check_llm_available():
+    cfg = SimulationConfig()
+    ok = OllamaBackend(cfg.ollama_base_url, cfg.llm_model).is_available()
+    return jsonify({"available": ok})
 
 
 @app.route("/api/npc/<npc_id>")

@@ -42,6 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('resize', resizeCanvas);
     canvas.addEventListener('click', onMapClick);
     connectSocket();
+    checkOllamaStatus();
 });
 
 function resizeCanvas() {
@@ -478,16 +479,38 @@ function resetSim() {
     });
 }
 
-function startSimulation() {
+async function checkOllamaStatus() {
+    const dot = document.getElementById('ollama-dot');
+    if (!dot) return;
+    try {
+        const r = await fetch('/api/llm/check').then(r => r.json());
+        dot.className = 'ollama-dot ' + (r.available ? 'online' : 'offline');
+        dot.title = r.available ? 'Ollama: connected' : 'Ollama: not running';
+    } catch {
+        dot.className = 'ollama-dot offline';
+        dot.title = 'Ollama: not running';
+    }
+}
+
+async function startSimulation() {
+    const llmCheckbox = document.getElementById('cfg-llm');
+    if (llmCheckbox.checked) {
+        const r = await fetch('/api/llm/check').then(r => r.json()).catch(() => ({ available: false }));
+        if (!r.available) {
+            if (!confirm('Ollama is not running.\n\nStart simulation without LLM? (NPCs will use Utility AI)')) return;
+            llmCheckbox.checked = false;
+        }
+    }
+
     const data = {
         npc_count: parseInt(document.getElementById('cfg-npc').value) || 5,
         start_hour: document.getElementById('cfg-time').value || "06:00",
         time_scale: parseFloat(document.getElementById('cfg-speed').value) || 1.0,
         seed: document.getElementById('cfg-seed').value,
-        llm_enabled: document.getElementById('cfg-llm').checked,
+        llm_enabled: llmCheckbox.checked,
         logger_enabled: document.getElementById('cfg-log').checked
     };
-    
+
     document.getElementById('btn-play').textContent = '⏸ Pause';
     document.getElementById('btn-play').classList.add('active');
     isPaused = false;
