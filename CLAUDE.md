@@ -172,6 +172,7 @@ LLM only fires on: `threat ≥ 0.8` OR `HP drop ≥ 15`. All other ticks use Uti
 - `docs/nextsteps.md` — **Yol haritası**: eksikler, v1.4/v1.5/v2.0/v3.0 görev listesi, LLM hedef şeması, dataset gereksinimleri
 - `docs/psychology_model.md` — Vitals decay, stress balance, emotion cross-inhibition, mood label algorithm (v1.4.0+)
 - `docs/integration_map.md` — Memory/Beliefs/Goals/Social/Traits → action consumer matrix (v1.4.0+)
+- `docs/glossary.md` — Tüm kısaltmalar ve teknik terimler sözlüğü (Türkçe açıklamalı)
 - `walkthrough.md` — Diagnostic session walkthroughs (v1.0.1 + v1.2.0)
 - `CHANGELOG.md` — Per-version history
 
