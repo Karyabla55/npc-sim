@@ -59,14 +59,20 @@ class SimulationConfig:
 
     # ── LLM Integration ──
     llm_enabled: bool = False
-    llm_backend: str = "ollama"                     # "ollama" | "mock"
-    llm_model: str = "hermes-lora"                  # custom fine-tuned model name
+    llm_backend: str = "ollama"                     # "ollama" | "mock" | "dual"
+    llm_model: str = "hermes-lora"                  # single-model (ollama backend)
     llm_timeout_seconds: float = 3.0
     llm_max_concurrent: int = 1                     # 1 = serial (Ollama VRAM safe)
     llm_max_queue_size: int = 64
     llm_interrupt_threat_threshold: float = 0.8     # H2: immediate call on high threat
     llm_interrupt_hp_drop: float = 15.0             # H2: immediate call on damage
     ollama_base_url: str = "http://localhost:11434"
+
+    # ── Dual-LLM backend (llm_backend = "dual") ──
+    llm_reasoner_model: str = "reasoner-lora-v5"
+    llm_formatter_model: str = "formatter-lora-v5"
+    llm_reasoner_base_url: str = "http://localhost:11434"
+    llm_formatter_base_url: str = "http://localhost:11435"
 
     # ── Diagnostics ──
     logger_enabled: bool = True        # False = no-op SimLogger, zero overhead

@@ -39,7 +39,7 @@ NPC-Sim bir **medeniyet ölçekli yaşayan dünya simülatörü**dür. Hedef:
 | SimLogger | ✅ Tam işlevsel | 44 sütun CSV, zero-overhead toggle |
 | LLM pipeline (interrupt) | ✅ Çalışıyor | Async, priority queue, 5 hardening mekanizması |
 | LLM payload (NPCSerializer) | ✅ Çalışıyor | Token-verimli JSON, tüm state dahil |
-| DualLLMBackend | ❌ Yok | Dokümanda var, kodda yok |
+| DualLLMBackend | ✅ Tamamlandı (v1.6.0) | `DualLLMBackend` + H6 gate + npc_id injection |
 | Web dashboard | ⚠️ Temel | State görüntüleme var, LLM kontrol eksik |
 
 ---
@@ -350,7 +350,7 @@ Risk-first triage: uzun-vade stabilite (Phase A) → entegrasyon boşlukları
 |-------|-------|----------|
 | G7 | `npc_sim/llm/llm_decision_system.py` | `reasoning` sonucu NPC'nin kendi hafızasına `MemoryEntry` olarak ekle |
 | G8 | `npc_sim/llm/npc_serializer.py` | Sosyal kararlar için hedef NPC'nin özetini payload'a ekle (`target_context`) |
-| G9 | `npc_sim/llm/llm_backend.py` | `DualLLMBackend` implement et (Bug #16 doc kapatıldı; impl hâlâ planlı) |
+| G9 ✅ | `npc_sim/llm/llm_backend.py` | `DualLLMBackend` implement edildi (v1.6.0); H6 CoT gate + npc_id injection |
 
 ---
 
@@ -364,7 +364,7 @@ Risk-first triage: uzun-vade stabilite (Phase A) → entegrasyon boşlukları
 | D2 | `npc_sim/decisions/actions/builtin.py` | `GatherAction` Zone resource'unu tüketsin; resource sıfırda `is_valid()` False dönsün |
 | D3 | `npc_sim/simulation/world_event_system.py` (YENİ) | Periyodik dünya olayları: pazar günü, salgın, bandit baskını, festival |
 | D4 | `npc_sim/simulation/faction_registry.py` | Faction olayları: savaş ilanı, barış, ittifak — NPC kararlarını tetiklesin |
-| D5 | `npc_sim/llm/llm_backend.py` | `DualLLMBackend` implement et (Reasoner port:11434, Formatter port:11435) |
+| D5 ✅ | `npc_sim/llm/llm_backend.py` | `DualLLMBackend` implement edildi (v1.6.0) — bkz. G9 |
 | D6 | `npc_sim/npc/inventory.py` | Item fiyat tablosu, arz/talep sinyali |
 | D7 | `npc_sim/decisions/actions/builtin.py` | `TradeAction` müzakere döngüsü: teklif → karşı teklif → kabul/red |
 | D8 | `npc_sim/simulation/gossip_system.py` (YENİ) | Bilgi yayılımı: NPC sosyalleşince belief'ler yayılır (gossiping chain) |
@@ -499,7 +499,7 @@ scenario_negative_memory = {**scenario_base, "memories": [{"evt": "Betrayal", "d
 | T2 | `npc_sim/decisions/decision_system.py:86` | Action lock execute'dan sonra oluşturuluyor — ilk tick korumasız | Orta |
 | T3 | `npc_sim/npc/npc_factory.py` | Tüm NPC'ler erkek veya "Unknown" cinsiyette başlıyor | Düşük |
 | T4 | `npc_sim/simulation/world_map.py` | Zone'lar hardcoded — config dosyasından yüklenebilir olmalı | Orta |
-| T5 | `docs/bugs_and_issues.md:#16` | DualLLMBackend dokümanda var, kodda yok | Kritik |
+| T5 ✅ | `npc_sim/llm/llm_backend.py` | DualLLMBackend implement edildi (v1.6.0) | — |
 | T6 | `docs/bugs_and_issues.md:#13` | Action lock execute'dan sonra oluşuyor | Orta |
 | T7 | `npc_sim/npc/social.py` | Faction'lar yerine bireysel trust serializer'da gösteriliyor — karışıklık | Düşük |
 | T8 | Genel | `test_llm_smoke.py` çok dar — unit testler yok | Yüksek |
@@ -524,13 +524,21 @@ scenario_negative_memory = {**scenario_base, "memories": [{"evt": "Betrayal", "d
             llm_tick_every kaldırıldı, #18 queue preemption, #16 doc sync)
   4. Test altyapısı: tests/ dizini (68 case) + run_diagnostic.py --strict
 
-Hemen (v1.6+):
-  1. G7: LLM reasoning'i NPC hafızasına yaz
-  2. G8: target_context payload eklemesi (sosyal kararlar)
-  3. G9: DualLLMBackend implement et (Bug #16'nın kod tarafı)
-  4. Action selection tuning: NPC'lerin Eat/Drink/Socialize'a yönelmesini sağla
-  5. Multi-faction senaryo: B4 faction-disposition wirmesini gerçek hostility
-     ile sahnelemek (mevcut diagnostic'te tetiklenmiyor)
+✅ Tamamlandı (v1.6.0 — 2026-05-17):
+  1. G9: DualLLMBackend implement edildi (H6 gate + npc_id injection)
+  2. Generator redesign: multi-factor decision model (R5, R6, R7, R9, R12, R14)
+  3. Training fixes: packing=False, response masking, Formatter base swap (R1–R4)
+  4. Persona card + Gemma 3 4B bootstrap CoT pipeline
+  5. docs/llm_pipeline.md (canonical pipeline doc)
+
+Hemen (v1.7):
+  1. G10: LLM reasoning'i NPC hafızasına yaz (SelfThought event)
+  2. G11: LLM emotion → NPC psychology 0.3 ağırlıklı harmanlama
+  3. G12: CoT → BeliefSystem (implicit beliefs, 0.3 confidence)
+  4. G13: CoT future-intent → NPCGoals.enqueue (soft goals)
+  5. G14: Multi-turn dialogue state (dialogue_context ring buffer)
+  6. G15: LLM-gözleminden trait kazanımı (N-tutarlı emotion → trait list)
+  7. G16: Runtime UtilityEvaluator ← multi-factor model hizalaması
 
 Kısa vadeli (v2.0 - 1. adım):
   6. D1: ZoneState sistemi (resource miktarı)
@@ -541,6 +549,31 @@ Uzun vade (v3.0):
   9. V1: NPC yaşam döngüsü (birth/aging/death)
  10. V6: Self-play dataset üretimi
 ```
+
+---
+
+## 11. LLM Çıktısının Derin Kullanımı (v1.7+ Yol Haritası)
+
+**Bağlam:** v1.6.0 sonrası `LLMResponse` derin bir biliş sinyali taşıyor (`reasoning` CoT, `emotion`, `dialogue`, `target_id`, `selected_action`). Ancak çalışma zamanı bu zenginliğin yalnızca `action_id` ve `dialogue`-for-socialize/trade kısmını tüketiyor. Aşağıdaki görevler, LLM beyninin ürettiği derinliği NPC'nin uzun süreli durumuna geri besleyerek "düşünen NPC" hissini kazandırır.
+
+| Görev | Dosya | Açıklama |
+|-------|-------|----------|
+| **G10** | `npc_sim/llm/llm_decision_system.py` `_apply_pending()` | LLM `reasoning` (tam CoT) bir `SelfThought` event'i olarak `npc.memory.add()`'e yazılsın. `emotional_weight` = (happiness − fear) baz alınsın. Diyalog dışı tüm action'lar için bu yapılmalı. (G7'nin tamamlanması.) |
+| **G11** | `npc_sim/llm/llm_decision_system.py` `_apply_pending()` | LLM `emotion` alanı NPC'nin baskın duygusuna 0.3 ağırlıkla harmanlansın (`set_happiness/fear/anger` üzerinden, mood label yeniden hesaplansın). Şu an emotion runtime'da kullanılmıyor. |
+| **G12** | `npc_sim/llm/cot_parser.py` (yeni) | CoT içindeki entity referansları + sentiment kelimeleri regex/keyword ile yakalansın → `BeliefSystem.add_belief()` düşük confidence (0.3) ile yazsın. İlk versiyon kelime listesi tabanlı; v1.8'de Formatter'a "implicit_beliefs" alanı ekleme seçeneği. |
+| **G13** | `npc_sim/npc/goals.py` + parser | CoT'ta gelecek-niyet ifadeleri ("sonra tapınağa gideceğim", "yarın pazara") → `NPCGoals.enqueue()` düşük öncelikli soft-goal olarak. Saturation guard: tek seferde max 2 enqueue. |
+| **G14** | `npc_sim/social/dialogue_state.py` (yeni) + `SocializeAction.execute()` | Diyalog tek-atış değil; konuşma durumu (last_speaker, last_topic, turn_count, target_id) per-NPC ring buffer'da tutulsun. LLM bir sonraki socialize için bu bağlamı görsün (`npc_serializer.py` payload'a `dialogue_context` alanı ekle). Çok-turn konuşmalar mümkün olur. |
+| **G15** | `npc_sim/npc/traits.py` + `_apply_pending()` | LLM N tik üst üste aynı emergent trait sergilerse (örn. `emotion="Devout"` 10× / 50 tik) NPC'nin `traits` listesine eklensin (cap = 6). LLM gözleminden trait kazanım/kayıp loop. Kalıcı kişilik evrimi. |
+| **G16** | `npc_sim/decisions/utility_evaluator.py` + tüm 12 action `evaluate()` | Generator'da kullanılan multi-factor karar modelini (`self_power`, `perceived_threat`, `duty_pull`) `UtilityEvaluator`'a entegre et. Şu an LLM ile Utility AI farklı puanlama yapıyor → LLM Brain devre dışıyken NPC davranışı farklı görünüyor. |
+
+**Bağımlılıklar:** G10→G11→G12 sıralı. G13 bağımsız. G14 G10'a bağlı. G15 G10+G11 üzerine kurulur. G16 bağımsız ama büyük refactor.
+
+**Kabul kriteri (v1.7 release-gate):**
+- 24-saatlik diagnostic run sonunda her NPC'nin memory'sinde ≥ 1 `SelfThought` entry (G10)
+- LLM-driven emotion shift CSV'de gözlemlenebilir; mood label değişimi LLM call'lar etrafında lokalize (G11)
+- En az %30 NPC'de LLM-kaynaklı belief entry mevcut (G12)
+- Çok-turn diyalog: aynı çiftin 2+ sıralı socialize'ı CSV'de görülüyor (G14)
+- LLM kapalı vs açık run'da action distribution farkı < %15 (G16 hizalama testi)
 
 ---
 

@@ -99,4 +99,6 @@ venv.bak/
 logs/
 Stateful_NPC/data/
 *.ipynb
+!notebooks/newgen-rpg.ipynb
+!notebooks/log_analysis.ipynb
 Model/

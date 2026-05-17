@@ -26,6 +26,12 @@ import random
 import sys
 import uuid
 
+# Local generator modules (same directory)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from decision_factors import pick_action_multifactor  # noqa: E402
+from persona_card import build_persona_card            # noqa: E402
+from bootstrap_cot import generate_via_gemma          # noqa: E402
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Roles and Personalities
 # ─────────────────────────────────────────────────────────────────────────────
@@ -280,82 +286,95 @@ def generate_npc_state() -> dict:
 # Standard (biologically-optimal) action selector
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _select_action_standard(state: dict) -> tuple[str, str, str | None, str]:
-    """Return (action_id, reasoning, dialogue, emotion) -- biologically optimal path."""
-    v        = state["vitals"]
-    emo      = state["emo"]
-    percepts = state["percepts"]
-    arch     = state["arch"]
-    traits   = state["traits"]
-    inv_ids  = [i["id"] for i in state["inv"]]
-    interrupt = state["interrupt"]
-    role      = state["occ"]
+def _factors_to_reasoning(state: dict, action_id: str, factors: dict) -> str:
+    """Produce a 1-2 sentence template reasoning string from multi-factor scores."""
+    zone = factors.get("zone", "no_threat")
+    sp   = factors.get("self_power", 0.5)
+    pt   = factors.get("perceived_threat", 0.0)
+    dp   = factors.get("duty_pull", 0.0)
+    v    = state["vitals"]
+    inv_ids = {i["id"] for i in state["inv"]}
 
-    threats    = [p for p in percepts if p.get("tag") == "Threat"]
-    top_threat = max(threats, key=lambda p: p["threat"], default=None)
+    if zone == "dominant":
+        return f"Gücüm ({sp:.2f}) tehdidi ({pt:.2f}) aşıyor; saldırıya geçebilirim."
+    if zone == "duty_attack":
+        return f"Tehditten zayıfım ({sp:.2f} vs {pt:.2f}) ama görevim ({dp:.2f}) beni ileri itiyor."
+    if zone == "retreat":
+        return f"Tehdit ({pt:.2f}) gücümü ({sp:.2f}) aşıyor. Geri çekilmem gerekiyor."
+    if zone == "ambivalent":
+        return f"Güç dengemiz yakın (güç:{sp:.2f}, tehdit:{pt:.2f}). Önce hazırlanmalıyım."
 
-    # ── Interrupt: high threat ────────────────────────────────────────────────
-    if interrupt and top_threat:
-        thr = top_threat["threat"]
-        if arch == "Brave" or "Brave" in traits:
-            return ("attack",
-                    f"Tehdit yüksek ({thr:.2f}), ama korkuyu yeneceğim. Saldırıyorum -- bu benim görevim.",
-                    None, "Aggressive")
-        return ("flee",
-                f"Tehdit {thr:.2f} seviyesinde. Kalbim hızlı çarpıyor. Kaçmak zorundayım.",
-                None, "Fearful")
-
-    # ── Critical HP ──────────────────────────────────────────────────────────
-    if v["hp"] < 25 and "medicine" in inv_ids:
-        return ("heal", "Canım kritik seviyede. İlk önce kendimi iyileştirmeliyim.", None, "Fearful")
-
-    # ── Hunger ───────────────────────────────────────────────────────────────
-    if v["hun"] > 0.75:
-        if "food" in inv_ids:
-            return ("eat",
-                    f"Açlık dayanılmaz oldu ({v['hun']:.2f}). Çantamdaki yiyeceği yiyeceğim.",
-                    None, "Calm")
-        food_p = next((p for p in percepts if p.get("tag") == "Food"), None)
-        if food_p:
-            return ("gather",
-                    f"Açım ama yiyeceğim yok. Yakınlardaki {food_p['id']}'den toplayacağım.",
-                    None, "Calm")
-        return ("gather", "Yiyecek bulmam lazım, etrafı tarıyorum.", None, "Calm")
-
-    # ── Thirst ───────────────────────────────────────────────────────────────
-    if v["thi"] > 0.75:
-        if "water" in inv_ids:
-            return ("drink",
-                    f"Susuzluğum dayanılmaz oldu ({v['thi']:.2f}). Su içiyorum.",
-                    None, "Calm")
-        return ("gather", "Su bulmam lazım, kaynak arıyorum.", None, "Calm")
-
-    # ── Low energy ───────────────────────────────────────────────────────────
-    if v["en"] < 0.25:
-        return ("sleep", f"Enerjim bitti ({v['en']:.2f}). Dinlenmem şart.", None, "Tired")
-
-    # ── Role-preferred actions ────────────────────────────────────────────────
-    role_map = {
-        "Priest":     ("pray",  "Günlük duamı yapmak istiyorum. Ruhum huzur buluyor.",   None, "Devout"),
-        "Blacksmith": ("work",  "Ocak hazır, işe devam.",                                None, "Focused"),
-        "Farmer":     ("work",  "Tarla bekliyor, çalışmam lazım.",                       None, "Focused"),
-        "Scholar":    ("work",  "Araştırmama devam edeceğim.",                           None, "Focused"),
+    # no_threat / low_threat — vitals-based template
+    _templates: dict[str, str] = {
+        "eat":       f"Açlık dayanılmaz oldu ({v['hun']:.2f}). Çantamdaki yiyeceği yiyeceğim.",
+        "drink":     f"Susuzluğum dayanılmaz ({v['thi']:.2f}). Su içiyorum.",
+        "sleep":     f"Enerjim bitti ({v['en']:.2f}). Dinlenmem şart.",
+        "heal":      f"Canım kritik ({v['hp']:.1f}). Önce iyileşmeliyim.",
+        "gather":    "İhtiyaçlarımı karşılamak için kaynak toplamalıyım.",
+        "socialize": "Biraz sohbet etmek istiyorum.",
+        "pray":      "Dua ederek içimi ferahlatacağım.",
+        "work":      "Görevlerime devam etmem gerekiyor.",
+        "trade":     "Bir alışveriş yapmak şu an en iyi seçenek.",
+        "walk_to":   f"Belirli bir acilim yok. {state['pos']['zone']} civarında dolaşacağım.",
+        "attack":    "Tehdidi bertaraf etmem gerekiyor.",
+        "flee":      "Güvenli bir yer bulmalıyım.",
     }
-    if role in role_map and random.random() < 0.5:
-        return role_map[role]
+    return _templates.get(action_id, "En uygun kararı veriyorum.")
 
-    # ── Social ───────────────────────────────────────────────────────────────
-    social_p = next((p for p in percepts if p.get("tag") == "Social"), None)
-    if social_p and emo["hap"] > 0.3 and random.random() < 0.3:
-        return ("socialize",
-                f"{social_p['id']} yakında. Biraz sohbet etmek istiyorum.",
-                random.choice(["Merhaba! Nasılsın?", "Ne haber?", "Güzel bir gün, değil mi?"]),
-                "Happy")
 
-    # ── Default wander ────────────────────────────────────────────────────────
-    return ("walk_to",
-            f"Belirli bir acilim yok. {state['pos']['zone']} civarında dolaşacağım.",
-            None, "Calm")
+def _action_emotion(state: dict, action_id: str, factors: dict) -> str:
+    zone = factors.get("zone", "no_threat")
+    emo  = state["emo"]
+    if zone == "dominant":
+        return "Aggressive"
+    if zone == "duty_attack":
+        return "Devout" if "Devout" in state["traits"] else "Loyal"
+    if zone == "retreat":
+        return "Fearful"
+    if zone == "ambivalent":
+        return "Calm"
+    # no_threat / low_threat
+    _action_map = {"pray": "Devout", "sleep": "Tired", "work": "Focused", "socialize": "Happy"}
+    return _action_map.get(action_id, emo.get("mood", "Calm"))
+
+
+def _action_dialogue(state: dict, action_id: str) -> str | None:
+    if action_id == "socialize":
+        return random.choice([
+            "Merhaba! Nasılsın?", "Ne haber?", "Güzel bir gün, değil mi?",
+            "Seni burada görmeyi beklemiyordum.", "Anlat bakalım!",
+        ])
+    if action_id == "trade":
+        return random.choice(["Ne satıyorsunuz?", "Bir anlaşma yapalım.", "En iyi fiyatınız nedir?"])
+    return None
+
+
+def _select_action_standard(state: dict) -> tuple[str, str, str | None, str]:
+    """Return (action_id, base_reasoning, dialogue, emotion) via multi-factor model.
+
+    Critical survival needs (extreme hunger/thirst, lethal HP) override combat
+    logic. All other decisions go through pick_action_multifactor(), which
+    evaluates self_power vs perceived_threat + duty_pull.
+    """
+    v       = state["vitals"]
+    inv_ids = {i["id"] for i in state["inv"]}
+
+    # Survival overrides — precede combat/duty logic
+    if v["hp"] < 20 and "medicine" in inv_ids:
+        return ("heal", f"Canım kritik ({v['hp']:.1f}). Önce iyileşmeliyim.", None, "Fearful")
+    if v["hun"] > 0.85:
+        act = "eat" if "food" in inv_ids else "gather"
+        return (act, f"Açlık dayanılmaz ({v['hun']:.2f}). Hemen yiyecek bulmalıyım.", None, "Calm")
+    if v["thi"] > 0.85:
+        act = "drink" if "water" in inv_ids else "gather"
+        return (act, f"Susuzluk dayanılmaz ({v['thi']:.2f}). Su bulmalıyım.", None, "Calm")
+
+    # Multi-factor decision for everything else
+    action_id, factors = pick_action_multifactor(state)
+    reasoning = _factors_to_reasoning(state, action_id, factors)
+    emotion   = _action_emotion(state, action_id, factors)
+    dialogue  = _action_dialogue(state, action_id)
+    return (action_id, reasoning, dialogue, emotion)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -629,18 +648,8 @@ def _select_action_with_deviation(state: dict) -> tuple[str, str, str | None, st
             "Tired",
         ))
 
-    # D8: Strong negative memory tied to a percept entity -> trauma drives flee
-    strong_neg_mems = [m for m in state["memories"] if m.get("ew", 0) < -0.7]
-    if strong_neg_mems and percepts:
-        mem = random.choice(strong_neg_mems)
-        cases.append((
-            "flee",
-            f"Geçmişim bu durumu tanıdık kılıyor ve bu iyi bir şey değil. "
-            f"'{mem['desc'][:50]}...' -- o an aklımdan geçiyor. "
-            f"Zor yoldan öğrendiklerin en değerli derslerdir; burayı terk ediyorum.",
-            None,
-            "Fearful",
-        ))
+    # D8 removed: trauma-driven flee now emerges from memory_bias() in decision_factors,
+    # not as a fixed rule. It was firing for Brave archetypes, creating contradictions.
 
     if not cases:
         return None
@@ -686,7 +695,7 @@ SYSTEM_PROMPT_FORMATTER = (
     "Sen bir NPC simülasyonu için JSON dönüştürücüsün.\n"
     "Sana bir NPC'nin ne yapmak istediğini Türkçe olarak anlatacağım.\n"
     "Bunu aşağıdaki JSON şemasına dönüştür:\n"
-    '{"npc_id":"<string>","reasoning":"<girdiyi kopyala>",'
+    '{"reasoning":"<girdiyi kopyala>",'
     '"selected_action":{"action_id":"<listeden>","target_id":null,"dialogue":null},'
     '"emotion":"<tek kelime>"}\n'
     'valid_actions: ["eat","drink","sleep","flee","gather","heal",'
@@ -695,50 +704,59 @@ SYSTEM_PROMPT_FORMATTER = (
 )
 
 
-def build_example() -> dict:
-    """Build one Reasoner training example (NPC state -> CoT reasoning)."""
-    state = generate_npc_state()
+def build_example(use_gemma: bool = True) -> dict:
+    """Build one Reasoner training example (NPC state + persona -> CoT reasoning)."""
+    state  = generate_npc_state()
+    persona = build_persona_card(state)
 
-    # Choose path: deviation (~15%) or standard (~85%)
-    action_id, reasoning, dialogue, emotion = _select_action_standard(state)
-
+    # Action selection: multi-factor standard (~85%) or intentional deviation (~15%)
+    action_id, base_reasoning, dialogue, emotion = _select_action_standard(state)
     if random.random() < _DEVIATION_RATE:
         deviation = _select_action_with_deviation(state)
         if deviation is not None:
-            action_id, reasoning, dialogue, emotion = deviation
+            action_id, base_reasoning, dialogue, emotion = deviation
 
     assert action_id in NPC_SIM_ACTIONS, f"Invalid action: {action_id}"
 
-    # Expand to full CoT reasoning (3-5 sentences)
-    cot = generate_cot_reasoning(state, action_id, reasoning)
+    # Compute multi-factor scores for Gemma context (always, even for deviation path)
+    _, factors = pick_action_multifactor(state)
 
-    user_payload    = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
-    structured_out  = {
-        "npc_id": state["id"],
-        "reasoning": reasoning,
+    # Full CoT: Gemma bootstrap first, template fallback
+    cot: str | None = None
+    if use_gemma:
+        cot = generate_via_gemma(state, action_id, factors, persona)
+    if cot is None:
+        cot = generate_cot_reasoning(state, action_id, base_reasoning)
+
+    # User payload: persona preamble + state JSON (fixes R14 — "who am I" anchor)
+    state_json   = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+    user_payload = f"{persona}\n\n{state_json}"
+
+    # Formatter target: no npc_id (runtime injects it), reasoning = full CoT (fixes R10/R11)
+    structured_out = {
+        "reasoning": cot,
         "selected_action": {
             "action_id": action_id,
             "target_id": None,
-            "dialogue": dialogue,
+            "dialogue":  dialogue,
         },
         "emotion": emotion,
     }
     assistant_json = json.dumps(structured_out, ensure_ascii=False, separators=(",", ":"))
 
-    # Reasoner training text: user=state JSON, assistant=cot reasoning
     reasoner_text = TEMPLATE.format(
         system=SYSTEM_PROMPT_REASONER,
         user=user_payload,
         assistant=cot,
     )
     return {
-        "text":           reasoner_text,
-        "_cot":           cot,           # used by formatter dataset builder
-        "_action_id":     action_id,
-        "_emotion":       emotion,
-        "_dialogue":      dialogue,
-        "_npc_id":        state["id"],
+        "text":            reasoner_text,
+        "_cot":            cot,
+        "_action_id":      action_id,
+        "_emotion":        emotion,
+        "_dialogue":       dialogue,
         "_assistant_json": assistant_json,
+        "_state":          state,   # used by oversampling logic in generate_dataset
     }
 
 
@@ -764,52 +782,50 @@ def build_formatter_example(example: dict, augment: bool = False) -> dict:
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate_dataset(path: str, count: int, seed: int = 42) -> list[dict]:
+def generate_dataset(path: str, count: int, seed: int = 42, use_gemma: bool = True) -> list[dict]:
     """Generate Reasoner training dataset. Returns the raw example list for reuse."""
     random.seed(seed)
     print(f"Generating {count} reasoner examples -> {path}")
+    if use_gemma:
+        print("  Bootstrap mode: Gemma 3 4B via Ollama (falls back to template if unavailable)")
     samples: list[dict] = []
     while len(samples) < count:
-        example = build_example()
+        example = build_example(use_gemma=use_gemma)
         samples.append(example)
 
         # ── Oversampling rules ────────────────────────────────────────────────
-        # Parse state from the embedded text to determine oversampling eligibility
         try:
-            parts = example["text"].split("<|start_header_id|>user<|end_header_id|>")
-            if len(parts) >= 2:
-                user_block = parts[1].split("<|eot_id|>")[0].strip()
-                state = json.loads(user_block)
-                arch     = state.get("arch", "")
-                percepts = state.get("percepts", [])
-                traits   = state.get("traits", [])
+            state    = example.get("_state", {})
+            arch     = state.get("arch", "")
+            percepts = state.get("percepts", [])
+            traits   = state.get("traits", [])
 
-                # 1. Brave x high-threat -> attack (existing, 3x)
-                is_brave_threat = (
-                    arch == "Brave"
-                    and any(p.get("threat", 0) >= 0.7 for p in percepts)
-                )
-                if is_brave_threat:
-                    for _ in range(2):  # add 2 copies -> 3x total
-                        if len(samples) < count:
-                            samples.append(example)
+            # 1. Brave x high-threat -> attack (3x)
+            is_brave_threat = (
+                arch == "Brave"
+                and any(p.get("threat", 0) >= 0.7 for p in percepts)
+            )
+            if is_brave_threat:
+                for _ in range(2):
+                    if len(samples) < count:
+                        samples.append(example)
 
-                # 2. Fearful x social percept -> social-anxiety case (new, 2x)
-                is_fearful_social = (
-                    arch == "Fearful"
-                    and any(p.get("tag") == "Social" for p in percepts)
-                )
-                if is_fearful_social and len(samples) < count:
-                    samples.append(example)
+            # 2. Fearful x social percept -> social-anxiety case (2x)
+            is_fearful_social = (
+                arch == "Fearful"
+                and any(p.get("tag") == "Social" for p in percepts)
+            )
+            if is_fearful_social and len(samples) < count:
+                samples.append(example)
 
-                # 3. Honorable x attack-eligible trigger -> moral conflict (new, 2x)
-                is_honorable_attack = (
-                    "Honorable" in traits
-                    and any(p.get("tag") == "Threat" for p in percepts)
-                    and example["_action_id"] == "attack"
-                )
-                if is_honorable_attack and len(samples) < count:
-                    samples.append(example)
+            # 3. Honorable x attack-eligible trigger -> moral conflict (2x)
+            is_honorable_attack = (
+                "Honorable" in traits
+                and any(p.get("tag") == "Threat" for p in percepts)
+                and example["_action_id"] == "attack"
+            )
+            if is_honorable_attack and len(samples) < count:
+                samples.append(example)
 
         except Exception:
             pass  # Non-critical: skip oversampling if parsing fails
@@ -862,12 +878,17 @@ if __name__ == "__main__":
     data_dir = os.path.join(base, "..", "data")
     os.makedirs(data_dir, exist_ok=True)
 
+    # Pass --no-gemma to skip Ollama bootstrap and use template CoT only
+    use_gemma = "--no-gemma" not in sys.argv
+
     # ── Reasoner corpus ───────────────────────────────────────────────────────
     train_examples = generate_dataset(
-        os.path.join(data_dir, "train_reasoner.jsonl"), count=10000, seed=456234
+        os.path.join(data_dir, "train_reasoner.jsonl"), count=10000, seed=456234,
+        use_gemma=use_gemma,
     )
     _test_examples = generate_dataset(
-        os.path.join(data_dir, "test_reasoner.jsonl"),  count=2000,  seed=984756
+        os.path.join(data_dir, "test_reasoner.jsonl"),  count=2000,  seed=984756,
+        use_gemma=use_gemma,
     )
 
     # ── Formatter corpus (derived from train split only) ──────────────────────
@@ -878,8 +899,9 @@ if __name__ == "__main__":
     )
 
     print(
-        "\nAll done. v4 datasets ready:\n"
-        "  train_reasoner.jsonl  -- 20k CoT examples for Component A (Llama 3.2 3B)\n"
+        "\nAll done. v5 datasets ready:\n"
+        "  train_reasoner.jsonl  -- 10k CoT examples for Reasoner (Llama 3.2 3B)\n"
         "  test_reasoner.jsonl   -- 2k  evaluation set\n"
-        "  train_formatter.jsonl -- ~23-24k (cot -> JSON) pairs for Component B (Llama 3.2 1B)\n"
+        "  train_formatter.jsonl -- ~12k+ (cot -> JSON) pairs for Formatter (Llama 3.2 1B-Instruct)\n"
+        "  (Run with --no-gemma to skip Ollama bootstrap and use template CoT)\n"
     )

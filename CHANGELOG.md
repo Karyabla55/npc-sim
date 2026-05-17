@@ -5,6 +5,77 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.6.0] — 2026-05-17 (LLM pipeline overhaul)
+
+Complete redesign of the training data generator and the runtime LLM backend.
+Fixes all four training-mechanics root causes (R1–R4) and eight generator
+semantic issues (R5–R14). Implements the long-planned DualLLMBackend (G9).
+Test suite: 76/76 PASS (68 existing + 8 new dual backend tests).
+
+### Generator — Decision Model (fixes R5, R6, R12)
+
+- **Multi-factor action selection** (`decision_factors.py` new module):
+  replaces the old single-trait heuristic (`if Brave: attack; else flee`) with
+  a weighted score: `self_power` (HP + energy + role + weapon + courage) vs
+  `perceived_threat` (base + memory_bias + crowd) modulated by `duty_pull`
+  (trait duty + faction loyalty + conscientiousness). 3-zone decision rule:
+  dominant → attack; duty-compelled-but-weaker → attack; retreat; ambivalent →
+  defensive. The Brave Guard no longer flees from wolves.
+
+- **D8 (trauma-flee) removed**: fired for all archetypes including Brave,
+  causing the exact contradiction the new model fixes. Memory bias now
+  integrated into `perceived_threat` via `memory_bias()`.
+
+### Generator — Persona Card (fixes R14)
+
+- **Persona preamble** (`persona_card.py` new module): builds a 2-3 sentence
+  Turkish narrative (name + role + faction + traits + b5 deciles) prepended to
+  every training example's user turn. Gives the 3B Reasoner a "who am I"
+  anchor instead of raw scalars only.
+
+### Generator — Bootstrap CoT (fixes R9, R13)
+
+- **Gemma 3 4B bootstrap** (`bootstrap_cot.py` new module): calls a local
+  Ollama `gemma3:4b` with the multi-factor scores + persona as structured
+  context. Produces non-templated Turkish CoT. SHA-keyed disk cache
+  (`.cot_cache/`) skips re-generation on incremental runs. Template
+  `generate_cot_reasoning()` is fallback when Gemma unavailable. Pass
+  `--no-gemma` to bypass entirely.
+
+### Generator — Schema Fixes (fixes R7, R10, R11)
+
+- **`npc_id` dropped from Formatter training schema** (`build_example()`):
+  runtime injects it post-parse. Formatter no longer invents random IDs.
+- **`reasoning` = full CoT** (not 1-sentence `base_reasoning`): label now
+  matches `SYSTEM_PROMPT_FORMATTER`'s `"<girdiyi kopyala>"` instruction.
+- **`SYSTEM_PROMPT_FORMATTER`** updated: `npc_id` line removed from schema.
+
+### Runtime — DualLLMBackend (closes G9)
+
+- **`DualLLMBackend`** (`npc_sim/llm/llm_backend.py`): two-stage pipeline —
+  Reasoner (port 11434) → Turkish CoT → H6 gate validation → Formatter
+  (port 11435) → JSON → `npc_id` injected → `LLMResponse`. Falls back to
+  single-pass `OllamaBackend` if CoT fails H6 (non-empty, 50-600 chars, not
+  JSON-shaped).
+- **`OllamaBackend._post_chat()`** extracted as a static helper, reused by
+  `DualLLMBackend` for both stages.
+- **`SimulationConfig`** new fields: `llm_reasoner_model`,
+  `llm_formatter_model`, `llm_reasoner_base_url`, `llm_formatter_base_url`.
+  `llm_backend` now accepts `"dual"`.
+- **`SimulationManager`** backend factory wired for `llm_backend="dual"`.
+- **5 new tests** in `tests/test_dual_llm_backend.py` covering happy path,
+  H6 fallback, formatter invalid JSON, npc_id injection, timeout propagation.
+
+### Documentation
+
+- `docs/llm_pipeline.md` — new canonical pipeline reference covering runtime
+  architecture, training pipeline, decision model formula, persona card spec,
+  bootstrap CoT prompt, schema reference, eval criteria, and troubleshooting.
+- `docs/nextsteps.md` — G9 marked ✅; G10–G16 LLM depth-utilization roadmap
+  added for v1.7+.
+
+---
+
 ## [1.5.1] — 2026-05-16 (post-v1.5.0 audit sweep)
 
 Wide audit across all modules for new/untracked bugs after v1.5.0 shipped.

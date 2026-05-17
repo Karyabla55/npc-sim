@@ -23,7 +23,7 @@ from npc_sim.diagnostics.sim_logger import SimLogger, VitalThresholdTracker
 
 # LLM — imported lazily so simulation runs fine without LLM installed
 try:
-    from npc_sim.llm.llm_backend import OllamaBackend, MockBackend
+    from npc_sim.llm.llm_backend import OllamaBackend, MockBackend, DualLLMBackend
     from npc_sim.llm.llm_request_queue import LLMRequestQueue
     from npc_sim.llm.llm_decision_system import LLMDecisionSystem
     from npc_sim.llm.npc_serializer import NPCSerializer
@@ -149,6 +149,14 @@ class SimulationManager:
         cfg = self.config
         if cfg.llm_backend == "mock":
             self._llm_backend = MockBackend()
+        elif cfg.llm_backend == "dual":
+            self._llm_backend = DualLLMBackend(
+                reasoner_model=cfg.llm_reasoner_model,
+                reasoner_url=cfg.llm_reasoner_base_url,
+                formatter_model=cfg.llm_formatter_model,
+                formatter_url=cfg.llm_formatter_base_url,
+                timeout=cfg.llm_timeout_seconds,
+            )
         else:
             self._llm_backend = OllamaBackend(
                 model=cfg.llm_model,
